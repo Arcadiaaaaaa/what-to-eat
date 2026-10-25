@@ -58,9 +58,14 @@ const MealRandom = (() => {
     return true;
   }
 
+  // 菜品可单独忌口：忌口菜不参与拼菜，也不计入“菜够不够拼”。
+  const eligibleDishes = (w) => w.dishes.filter((d) => !readPreference(d).blocked);
+
   // 旧版 v2 也可能保存字符串拼数；先转数值再去重，避免重复拼法取得额外概率。
-  const validKs = (w) => [...new Set(w.pickOptions.map(Number))]
-    .filter((k) => [2, 3, 4].includes(k) && k <= w.dishes.length);
+  const validKs = (w) => {
+    const n = eligibleDishes(w).length;
+    return [...new Set(w.pickOptions.map(Number))].filter((k) => [2, 3, 4].includes(k) && k <= n);
+  };
 
   function candidate(kind, entity) {
     if (typeof entity.id !== 'string' || !entity.id) throw new TypeError('实体需要稳定 id');
@@ -129,17 +134,6 @@ const MealRandom = (() => {
   const sumMoney = (prices) => prices.every(knownPrice)
     ? prices.reduce((s, p) => s + Math.round(p * 100), 0) / 100 : null;
 
-  function materialize(chosen, rng) {
-    const e = chosen.entity;
-    if (chosen.kind === 'item') return { ...chosen, price: sumMoney([e.price]) };
-    const ks = validKs(e);
-    const k = ks[Math.floor(unit(rng) * ks.length)];
-    const dishes = sampleDishes(e.dishes, k, rng);
-    const fixed = e.fixedPrices?.[k];
-    const price = knownPrice(fixed) ? sumMoney([fixed]) : sumMoney(dishes.map((d) => d.price));
-    return { ...chosen, k, dishes, price };
-  }
-
   // ---------- 价格区间（硬过滤，未知价格不合格） ----------
   function checkRange(r) {
     if (r == null) return null;
@@ -165,26 +159,32 @@ const MealRandom = (() => {
     return out;
   }
 
-  // 候选的全部具体配置，按 K 分组。一口价的 K 只占一项，抽中后再洗牌选菜；
-  // 否则枚举该 K 的菜品子集。组内均匀、组间均匀，与无区间时的分层抽样一致。
-  function expand(c) {
+  // 候选的全部具体配置，按 K 分组：枚举未忌口菜品的 K 元子集。
+  // 组间均匀选 K；组内子集概率 ∝ 所含菜品偏好权重之积（全中性时即均匀）。
+  // 一口价只决定价格，不影响哪些菜被拼出。
+  function expand(c, now) {
     const e = c.entity;
     if (c.kind === 'item') {
-      return { ...c, groups: [{ k: null, options: [{ price: sumMoney([e.price]), dishes: null }] }] };
+      return { ...c, groups: [{ k: null, options: [{ price: sumMoney([e.price]), dishes: null, weight: 1 }] }] };
     }
+    const dishes = eligibleDishes(e);
     return {
       ...c,
       groups: validKs(e).map((k) => {
         const fixed = e.fixedPrices?.[k];
-        if (knownPrice(fixed)) return { k, options: [{ price: sumMoney([fixed]), dishes: null }] };
         return {
           k,
-          options: combinations(e.dishes, k)
-            .map((dishes) => ({ price: sumMoney(dishes.map((d) => d.price)), dishes })),
+          options: combinations(dishes, k).map((ds) => ({
+            price: knownPrice(fixed) ? sumMoney([fixed]) : sumMoney(ds.map((d) => d.price)),
+            dishes: ds,
+            weight: ds.reduce((w, d) => w * weight(d, now), 1),
+          })),
         };
       }),
     };
   }
+
+  const groupWeight = (g) => g.options.reduce((s, o) => s + o.weight, 0);
 
   // 只保留满足 keep 的配置；一个可行配置都没有的实体退出候选池（先过滤，后加权）。
   const narrow = (expanded, keep) => expanded
@@ -197,28 +197,41 @@ const MealRandom = (() => {
 
   const pick = (arr, rng) => arr[Math.floor(unit(rng) * arr.length)];
 
-  function finish(row, group, option, rng, probability = row.probability) {
-    const { groups, ...out } = row;
-    if (row.kind === 'item') return { ...out, probability, price: option.price };
-    const dishes = option.dishes || sampleDishes(row.entity.dishes, group.k, rng);
-    return { ...out, probability, k: group.k, dishes, price: option.price };
+  function pickWeighted(options, rng) {
+    const u = unit(rng) * groupWeight({ options });
+    let acc = 0;
+    for (const o of options) {
+      acc += o.weight;
+      if (u < acc) return o;
+    }
+    return options[options.length - 1];
   }
 
-  // 单槽：按单价过滤后加权抽实体，再在其可行配置里均匀选 K、均匀选菜品子集。
+  function finish(row, group, option, probability = row.probability) {
+    const { groups, ...out } = row;
+    if (row.kind === 'item') return { ...out, probability, price: option.price };
+    return { ...out, probability, k: group.k, dishes: option.dishes, price: option.price };
+  }
+
+  // 抽中实体后落定：均匀选 K，再按菜品权重选子集。
+  function settle(row, rng) {
+    const group = pick(row.groups, rng);
+    return finish(row, group, pickWeighted(group.options, rng));
+  }
+
+  // 单槽：按单价过滤后加权抽实体，再在其可行配置里落定。
   function drawInRange(pool, opts, range, rng) {
-    const rows = distribution(narrow(pool.map(expand), (o) => inRange(o.price, range)), opts);
-    const chosen = draw(rows, rng);
-    if (!chosen) return null;
-    const group = pick(chosen.groups, rng);
-    return finish(chosen, group, pick(group.options, rng), rng);
+    const expanded = pool.map((c) => expand(c, opts.now));
+    const chosen = draw(distribution(narrow(expanded, (o) => inRange(o.price, range)), opts), rng);
+    return chosen ? settle(chosen, rng) : null;
   }
 
   // 组合：按合计过滤。P(f, d | 可行) ∝ P_F(f) × P_D(d) × 1[合计在区间内]，
   // P_F 含实体概率与实体内配置概率。精确枚举，不用拒绝采样，有解就一定抽得到。
   function drawPair(foodPool, drinkPool, foodOpts, drinkOpts, range, rng) {
     const sum = (a, b) => sumMoney([a, b]);
-    const foodAll = narrow(foodPool.map(expand), (o) => o.price !== null);
-    const drinkAll = narrow(drinkPool.map(expand), (o) => o.price !== null);
+    const foodAll = narrow(foodPool.map((c) => expand(c, foodOpts.now)), (o) => o.price !== null);
+    const drinkAll = narrow(drinkPool.map((c) => expand(c, drinkOpts.now)), (o) => o.price !== null);
     const priceList = (xs) => xs.flatMap((c) => c.groups.flatMap((g) => g.options.map((o) => o.price)));
     const foodPrices = priceList(foodAll);
     const drinkPrices = priceList(drinkAll);
@@ -233,8 +246,9 @@ const MealRandom = (() => {
     let total = 0;
     for (const row of foodRows) {
       for (const group of row.groups) {
+        const gw = groupWeight(group);
         for (const option of group.options) {
-          const pF = row.probability / row.groups.length / group.options.length;
+          const pF = row.probability / row.groups.length * option.weight / gw;
           let mass = 0;
           for (const d of drinkRows) {
             if (!inRange(sum(option.price, d.groups[0].options[0].price), range)) continue;
@@ -265,8 +279,8 @@ const MealRandom = (() => {
     }
     const foodProb = configs.filter((c) => c.row === f.row).reduce((s, c) => s + c.mass, 0) / total;
     return {
-      food: finish(f.row, f.group, f.option, rng, foodProb),
-      drink: finish(d, d.groups[0], d.groups[0].options[0], rng, drinkMass.get(d) / total),
+      food: finish(f.row, f.group, f.option, foodProb),
+      drink: finish(d, d.groups[0], d.groups[0].options[0], drinkMass.get(d) / total),
     };
   }
 
@@ -288,7 +302,7 @@ const MealRandom = (() => {
     if (!range) {
       for (const slot of slots) {
         const chosen = draw(distribution(pools[slot], opts(slot)), rng);
-        if (chosen) picks[slot] = materialize(chosen, rng);
+        if (chosen) picks[slot] = settle(expand(chosen, now), rng);
       }
     } else if (slots.length === 2 && pools.food.length && pools.drink.length) {
       Object.assign(picks, drawPair(pools.food, pools.drink, opts('food'), opts('drink'), range, rng));

@@ -379,3 +379,57 @@ test('导出 draw 供页面自行抽样；vote 拒绝缺少 key 的手拼结果'
   const data = { items: [item('a')], windows: [] };
   assert.throws(() => R.vote(data, { food: { entity: data.items[0] }, votes: {} }, 'food', 'like', NOW), TypeError);
 });
+
+// ---------- 菜品级忌口与权重 ----------
+const dishWin = (prices, pickOptions = [2], fixedPrices = {}) => ({
+  id: 'dw', name: 'dw', meals: ['lunch'], pickOptions, fixedPrices,
+  dishes: prices.map((price, i) => ({ id: `x${i}`, name: `菜${i}`, price })),
+});
+const ids = (r) => r.food.dishes.map((d) => d.id).sort().join('+');
+
+test('忌口菜永不被拼出；未忌口菜不够拼时窗口退出候选池', () => {
+  const w = dishWin([5, 6, 7, 8]);
+  ['x0', 'x1'].forEach((id) => R.applyFeedback(w.dishes.find((d) => d.id === id), 'block', NOW));
+  const data = { items: [], windows: [w] };
+  const rng = lcg(3);
+  for (let i = 0; i < 200; i++) {
+    assert.equal(ids(R.recommend(data, { meal: 'lunch', mode: 'food', now: NOW, rng })), 'x2+x3');
+  }
+  R.applyFeedback(w.dishes[2], 'block', NOW);
+  assert.equal(R.candidates(data, 'lunch', 'food').length, 0);
+  assert.equal(R.recommend(data, { meal: 'lunch', mode: 'food', now: NOW }).status, 'empty');
+});
+
+test('区间内只有含忌口菜的组合时报区间太窄，而不是拼出忌口菜', () => {
+  const w = dishWin([2, 3, 9, 9]);
+  R.applyFeedback(w.dishes[0], 'block', NOW);
+  const r = R.recommend({ items: [], windows: [w] }, {
+    meal: 'lunch', mode: 'food', now: NOW, rng: () => 0, priceRange: { lo: 0, hi: 6 },
+  });
+  assert.equal(r.status, 'empty');
+  assert.equal(r.priceBlocked, true);
+});
+
+test('子集概率 ∝ 菜品权重之积；一口价同样生效；组合区间下也成立', () => {
+  const freq = (data, options, n = 30000) => {
+    const rng = lcg(11);
+    const seen = {};
+    for (let i = 0; i < n; i++) {
+      const key = ids(R.recommend(data, { meal: 'lunch', now: NOW, rng, ...options }));
+      seen[key] = (seen[key] || 0) + 1;
+    }
+    return (key) => (seen[key] || 0) / n;
+  };
+  // 踩 x0 后：x0+x1、x0+x2 各 0.4，x1+x2 为 1 → 1/1.8
+  for (const fixed of [{}, { 2: 12 }]) {
+    const w = dishWin([3, 5, 8], [2], fixed);
+    R.applyFeedback(w.dishes[0], 'dislike', NOW);
+    const f = freq({ items: [], windows: [w] }, { mode: 'food' });
+    assert.ok(Math.abs(f('x1+x2') - 1 / 1.8) < 0.015, `${f('x1+x2')}`);
+    assert.ok(Math.abs(f('x0+x1') - 0.4 / 1.8) < 0.015, `${f('x0+x1')}`);
+  }
+  const w = dishWin([3, 5, 8]);
+  R.applyFeedback(w.dishes[0], 'dislike', NOW);
+  const f = freq({ items: [item('d', 'drink', 2)], windows: [w] }, { mode: 'combo', priceRange: { lo: 0, hi: 16 } });
+  assert.ok(Math.abs(f('x1+x2') - 1 / 1.8) < 0.015, `${f('x1+x2')}`);
+});
