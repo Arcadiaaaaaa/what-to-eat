@@ -110,6 +110,7 @@
       shop: strField(o.shop, 20),
       location: strField(o.location, 30),
       createdAt: typeof o.createdAt === 'number' ? o.createdAt : Date.now(),
+      sample: o.sample === true,
       preference: MealRandom.readPreference(o),
     };
   }
@@ -149,6 +150,7 @@
       fixedPrices,
       dishes: o.dishes.filter(dishIsValid).map(sanitizeDish),
       createdAt: typeof o.createdAt === 'number' ? o.createdAt : Date.now(),
+      sample: o.sample === true,
       preference: MealRandom.readPreference(o),
     };
   }
@@ -362,6 +364,7 @@
     renderPrefPanel();
     renderHistory();
     renderStats();
+    renderDataActions();
     refreshResultIfEmpty();
   }
 
@@ -1454,7 +1457,7 @@
     let added = 0;
     const itemKeys = new Set(state.items.map(itemKey));
     SAMPLE_ITEMS.forEach((s) => {
-      const item = sanitizeItem({ ...s, createdAt: Date.now() });
+      const item = sanitizeItem({ ...s, createdAt: Date.now(), sample: true });
       const key = itemKey(item);
       if (itemKeys.has(key)) return;
       itemKeys.add(key);
@@ -1463,7 +1466,7 @@
     });
     const winKeys = new Set(state.windows.map(windowKey));
     SAMPLE_WINDOWS.forEach((sw) => {
-      const w = sanitizeWindow({ ...sw, createdAt: Date.now() });
+      const w = sanitizeWindow({ ...sw, createdAt: Date.now(), sample: true });
       const key = windowKey(w);
       if (winKeys.has(key)) return;
       winKeys.add(key);
@@ -1473,6 +1476,69 @@
     save();
     renderAll();
     toast(added ? `已加载 ${added} 条示例数据` : '示例数据都已存在');
+  }
+
+  // 示例数据识别：打标的 + 与示例清单同名的（兼容打标之前载入的）
+  const isSampleItem = (i) => i.sample === true
+    || SAMPLE_ITEMS.some((s) => s.name === i.name && s.type === i.type);
+  const isSampleWindow = (w) => w.sample === true
+    || SAMPLE_WINDOWS.some((s) => s.name === w.name);
+
+  function sampleCount() {
+    return state.items.filter(isSampleItem).length + state.windows.filter(isSampleWindow).length;
+  }
+
+  function clearSampleData() {
+    const before = state.items.length + state.windows.length;
+    state.items = state.items.filter((i) => !isSampleItem(i));
+    state.windows = state.windows.filter((w) => !isSampleWindow(w));
+    const removed = before - state.items.length - state.windows.length;
+    save();
+    renderAll();
+    toast(removed ? `已清除 ${removed} 条示例数据` : '没有示例数据');
+  }
+
+  function clearAllData() {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(TICKET_KEY);
+    } catch (err) { /* 忽略 */ }
+    location.hash = '#/';
+    location.reload();
+  }
+
+  // 两次点击确认：第一次亮起，2.6 秒内再点执行
+  function confirmAction(btn, confirmText, fn) {
+    if (btn.dataset.armed === '1') {
+      delete btn.dataset.armed;
+      btn.textContent = btn.dataset.orig;
+      btn.classList.remove('confirm');
+      fn();
+      return;
+    }
+    btn.dataset.armed = '1';
+    btn.dataset.orig = btn.textContent;
+    btn.textContent = confirmText;
+    btn.classList.add('confirm');
+    setTimeout(() => {
+      if (btn.dataset.armed === '1') {
+        delete btn.dataset.armed;
+        btn.textContent = btn.dataset.orig;
+        btn.classList.remove('confirm');
+      }
+    }, 2600);
+  }
+
+  function renderDataActions() {
+    const btn = $('#clearSampleBtn');
+    if (!btn) return;
+    const n = sampleCount();
+    btn.hidden = n === 0;
+    btn.textContent = `清除示例数据（${n}）`;
+    if (btn.dataset.armed === '1') { // 数量变化时解除待确认态
+      delete btn.dataset.armed;
+      btn.classList.remove('confirm');
+    }
   }
 
   function exportData() {
@@ -1836,6 +1902,12 @@
     });
 
     $('#loadSample').addEventListener('click', loadSample);
+    $('#clearSampleBtn').addEventListener('click', (e) => {
+      confirmAction(e.currentTarget, '确认清除示例？', clearSampleData);
+    });
+    $('#clearAllBtn').addEventListener('click', (e) => {
+      confirmAction(e.currentTarget, '确认清空全部？不可恢复', clearAllData);
+    });
     $('#exportBtn').addEventListener('click', exportData);
     $('#importBtn').addEventListener('click', () => $('#importFile').click());
     $('#importFile').addEventListener('change', (e) => {
