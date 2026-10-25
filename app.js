@@ -21,7 +21,7 @@
     { name: '包子', price: 2.5, type: 'food', meals: ['breakfast'] },
     { name: '煎饼果子', price: 7, type: 'food', meals: ['breakfast'] },
     { name: '米饭套餐', price: 15, type: 'food', meals: ['lunch', 'dinner'] },
-    { name: '牛肉面', price: 16, type: 'food', meals: ['lunch', 'dinner'] },
+    { name: '牛肉面', price: 16, type: 'food', meals: ['lunch', 'dinner'], shop: '兰州拉面', location: '西门店' },
     { name: '麻辣烫', price: 18, type: 'food', meals: ['lunch', 'dinner'] },
     { name: '饺子', price: 14, type: 'food', meals: ['dinner'] },
     { name: '可乐', price: 3, type: 'drink', meals: ['lunch', 'dinner'] },
@@ -32,6 +32,7 @@
   const SAMPLE_WINDOWS = [
     {
       name: '自选快餐窗口', meals: ['lunch', 'dinner'], pickOptions: [2, 3], fixedPrices: { 2: 12 },
+      shop: '第一食堂', location: '二楼西侧',
       dishes: [
         { name: '红烧排骨', price: 7 },
         { name: '鱼香肉丝', price: 6 },
@@ -86,6 +87,9 @@
   }
   const itemKey = (i) => `${i.name}|${i.type}|${[...i.meals].sort().join(',')}`;
   const windowKey = (w) => `${w.name}|${[...w.meals].sort().join(',')}`;
+  // 店名 / 位置：可选字符串字段，展示用
+  const strField = (v, n) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, n) : '');
+  const shopText = (e) => [e && e.shop, e && e.location].filter(Boolean).join(' · ');
 
   // ---------- 数据校验与存取 ----------
   function isValidItem(o) {
@@ -103,6 +107,8 @@
       price: typeof o.price === 'number' && o.price >= 0 ? Math.round(o.price * 100) / 100 : null,
       type: o.type,
       meals: [...new Set(o.meals)],
+      shop: strField(o.shop, 20),
+      location: strField(o.location, 30),
       createdAt: typeof o.createdAt === 'number' ? o.createdAt : Date.now(),
       preference: MealRandom.readPreference(o),
     };
@@ -137,6 +143,8 @@
       id: typeof o.id === 'string' && o.id ? o.id : uid(),
       name: o.name.trim().slice(0, 40),
       meals: [...new Set(o.meals)],
+      shop: strField(o.shop, 20),
+      location: strField(o.location, 30),
       pickOptions,
       fixedPrices,
       dishes: o.dishes.filter(dishIsValid).map(sanitizeDish),
@@ -225,6 +233,8 @@
       price: parsePriceValue(o.price),
       type: normalizeType(o.type) || 'food',
       meals: normalizeMeals(o.meals).length ? normalizeMeals(o.meals) : ['breakfast', 'lunch', 'dinner'],
+      shop: strField(o.shop, 20),
+      location: strField(o.location, 30),
     };
   }
 
@@ -251,6 +261,8 @@
     return {
       name,
       meals: normalizeMeals(o.meals).length ? normalizeMeals(o.meals) : ['breakfast', 'lunch', 'dinner'],
+      shop: strField(o.shop, 20),
+      location: strField(o.location, 30),
       pickOptions: pickOptions.sort((a, b) => a - b),
       fixedPrices,
       dishes,
@@ -490,6 +502,8 @@
     const li = el('li');
     li.appendChild(el('span', 'name', item.name));
     li.appendChild(el('span', 'meal-chips', item.meals.map((m) => MEALS[m].mark).join(' · ')));
+    const sText = shopText(item);
+    if (sText) li.appendChild(el('span', 'shop-chip', `📍 ${sText}`));
     const flag = entityFlag(item);
     if (flag) li.appendChild(flag);
     li.appendChild(priceEl('span', 'price', item.price));
@@ -525,6 +539,8 @@
       `${w.meals.map((m) => MEALS[m].mark).join('/')} · ${kParts.join(' · ')} · ${w.dishes.length} 道菜`));
     const wflag = entityFlag(w);
     if (wflag) head.appendChild(wflag);
+    const wShop = shopText(w);
+    if (wShop) card.appendChild(el('p', 'wc-loc', `📍 ${wShop}`));
     const wedit = el('button', 'edit wedit', '编辑');
     wedit.type = 'button';
     wedit.dataset.wid = w.id;
@@ -736,17 +752,21 @@
       const pick = r[slot];
       if (!pick) continue;
       const meta = { weight: pick.weight, probability: pick.probability, key: pick.key };
+      const shopSnap = {
+        shop: strField(pick.entity.shop, 20),
+        location: strField(pick.entity.location, 30),
+      };
       if (pick.kind === 'window') {
         record.food = {
           kind: 'window', entityId: pick.entity.id, name: pick.entity.name,
           k: pick.k, tag: K_LABEL[pick.k] || '拼',
           dishes: pick.dishes.map((d) => ({ id: d.id, name: d.name, price: d.price })),
-          price: pick.price, meta,
+          price: pick.price, meta, ...shopSnap,
         };
       } else {
         record[slot] = {
           kind: 'item', entityId: pick.entity.id, name: pick.entity.name,
-          price: pick.price, meta,
+          price: pick.price, meta, ...shopSnap,
         };
       }
     }
@@ -1010,6 +1030,10 @@
         row.appendChild(ul);
       }
 
+      // 店名 / 位置：知道去哪家吃
+      const sText = [rec.shop, rec.location].filter(Boolean).join(' · ');
+      if (sText) row.appendChild(el('div', 'ri-shop', `📍 ${sText}`));
+
       // 底栏：换一个 · 好吃 / 不爱 / 忌口 · 权重与概率
       const foot = el('div', 'ri-foot');
       if (!isWindow) {
@@ -1139,7 +1163,10 @@
     if (optKind === 'entity') {
       const entity = liveEntity(optId);
       if (!entity) return;
-      record[slot] = { kind: 'item', entityId: entity.id, name: entity.name, price: entity.price, meta: null };
+      record[slot] = {
+        kind: 'item', entityId: entity.id, name: entity.name, price: entity.price, meta: null,
+        shop: strField(entity.shop, 20), location: strField(entity.location, 30),
+      };
       if (record.votes[slot]) delete record.votes[slot];
       record.adjusted = true;
       save();
@@ -1193,6 +1220,8 @@
       $('#itemFormTitle').textContent = `编辑「${item.name}」`;
       $('#itemName').value = item.name;
       $('#itemPrice').value = item.price == null ? '' : item.price;
+      $('#itemShop').value = item.shop || '';
+      $('#itemLoc').value = item.location || '';
       form.querySelector(`input[name="itemType"][value="${item.type}"]`).checked = true;
       form.querySelectorAll('input[name="meal"]').forEach((c) => { c.checked = item.meals.includes(c.value); });
       $('#itemSubmitBtn').textContent = '保存修改';
@@ -1202,6 +1231,8 @@
       $('#itemFormTitle').textContent = '录入餐品 / 饮品';
       $('#itemName').value = '';
       $('#itemPrice').value = '';
+      $('#itemShop').value = '';
+      $('#itemLoc').value = '';
       form.querySelector('input[name="itemType"][value="food"]').checked = true;
       form.querySelectorAll('input[name="meal"]').forEach((c) => { c.checked = c.value === currentMeal; });
       $('#itemSubmitBtn').textContent = '＋ 添加到清单';
@@ -1225,6 +1256,8 @@
       if (!Number.isFinite(price) || price < 0) return showFormError('价格需为不小于 0 的数字');
     }
     $('#formError').hidden = true;
+    const shop = strField($('#itemShop').value, 20);
+    const location = strField($('#itemLoc').value, 30);
 
     if (editing && editing.kind === 'item') {
       const target = state.items.find((i) => i.id === editing.id);
@@ -1233,6 +1266,8 @@
         target.price = price;
         target.type = type;
         target.meals = meals;
+        target.shop = shop;
+        target.location = location;
       }
       save();
       setItemEditMode(null);
@@ -1241,10 +1276,15 @@
       return;
     }
 
-    state.items.push({ id: uid(), name: name.slice(0, 40), price, type, meals, createdAt: Date.now() });
+    state.items.push({
+      id: uid(), name: name.slice(0, 40), price, type, meals,
+      shop, location, createdAt: Date.now(),
+    });
     save();
     $('#itemName').value = '';
     $('#itemPrice').value = '';
+    $('#itemShop').value = '';
+    $('#itemLoc').value = '';
     $('#itemName').focus();
     renderAll();
     toast(meals.includes(currentMeal)
@@ -1267,6 +1307,8 @@
     if (win) {
       $('#windowFormTitle').textContent = `编辑窗口「${win.name}」`;
       $('#windowName').value = win.name;
+      $('#windowShop').value = win.shop || '';
+      $('#windowLoc').value = win.location || '';
       form.querySelectorAll('input[name="wmeal"]').forEach((c) => { c.checked = win.meals.includes(c.value); });
       form.querySelectorAll('input[name="pickK"]').forEach((c) => {
         c.checked = win.pickOptions.includes(Number(c.value));
@@ -1282,6 +1324,8 @@
     } else {
       $('#windowFormTitle').textContent = '录入拼菜窗口';
       $('#windowName').value = '';
+      $('#windowShop').value = '';
+      $('#windowLoc').value = '';
       form.querySelectorAll('input[name="wmeal"]').forEach((c) => { c.checked = c.value === currentMeal; });
       form.querySelectorAll('input[name="pickK"]').forEach((c) => { c.checked = false; });
       form.querySelectorAll('.fixed-price-row input').forEach((i) => { i.value = ''; });
@@ -1313,7 +1357,11 @@
       fixedPrices[k] = v;
     }
     errEl.hidden = true;
-    return { name: name.slice(0, 40), meals, pickOptions: ks, fixedPrices };
+    return {
+      name: name.slice(0, 40), meals, pickOptions: ks, fixedPrices,
+      shop: strField($('#windowShop').value, 20),
+      location: strField($('#windowLoc').value, 30),
+    };
   }
 
   function submitWindow(form) {
@@ -1327,6 +1375,8 @@
         target.meals = parsed.meals;
         target.pickOptions = parsed.pickOptions;
         target.fixedPrices = parsed.fixedPrices;
+        target.shop = parsed.shop;
+        target.location = parsed.location;
       }
       save();
       setWindowEditMode(null);
@@ -1337,6 +1387,7 @@
 
     state.windows.push({
       id: uid(), name: parsed.name, meals: parsed.meals,
+      shop: parsed.shop, location: parsed.location,
       pickOptions: parsed.pickOptions, fixedPrices: parsed.fixedPrices,
       dishes: [], createdAt: Date.now(),
     });

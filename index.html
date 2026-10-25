@@ -97,6 +97,16 @@
               <span class="field-label">价格（可留空）</span>
               <input type="number" id="itemPrice" placeholder="如 15，可留空" min="0" step="any" inputmode="decimal">
             </label>
+            <div class="field two-col">
+              <label>
+                <span class="field-label">店名（可选）</span>
+                <input type="text" id="itemShop" placeholder="如：兰州拉面" maxlength="20" autocomplete="off">
+              </label>
+              <label>
+                <span class="field-label">位置（可选）</span>
+                <input type="text" id="itemLoc" placeholder="如：二楼东侧 8 号窗" maxlength="30" autocomplete="off">
+              </label>
+            </div>
             <div class="field">
               <span class="field-label">类别</span>
               <div class="type-toggle">
@@ -137,6 +147,16 @@
               <span class="field-label">窗口名称</span>
               <input type="text" id="windowName" placeholder="如：自选快餐窗口" maxlength="30" autocomplete="off">
             </label>
+            <div class="field two-col">
+              <label>
+                <span class="field-label">店名（可选）</span>
+                <input type="text" id="windowShop" placeholder="如：第一食堂" maxlength="20" autocomplete="off">
+              </label>
+              <label>
+                <span class="field-label">位置（可选）</span>
+                <input type="text" id="windowLoc" placeholder="如：二楼西侧" maxlength="30" autocomplete="off">
+              </label>
+            </div>
             <fieldset class="meal-picker">
               <legend class="field-label">适用于</legend>
               <div class="meal-options">
@@ -203,8 +223,11 @@
    - price：单价，数字，单位元；菜单没写就给 null
    - type："food"（餐品）或 "drink"（饮品，粥、汤、豆浆等也按 drink）
    - meals：适用餐段数组，取值 "breakfast" / "lunch" / "dinner"，对应早餐 / 午餐 / 晚餐；菜单没说明就按常理判断
+   - shop：售卖的店名 / 档口 / 窗口名（照片或文字里可见才填，没有就省略）
+   - location：位置，如"二楼东侧""西门对面"（可见才填，没有就省略）
 4. windows 是可以自选组合、双拼 / 三拼的窗口（自选快餐、称重菜、麻辣烫自选等），每个对象包含：
    - name：窗口名称
+   - shop / location：同上，窗口所在的店与位置（可见才填）
    - meals：同上
    - pickOptions：支持的拼法，如 [2, 3] 表示双拼、三拼
    - fixedPrices：可选，按拼数的一口价，如 {"2": 12, "3": 15}；菜单没写就省略

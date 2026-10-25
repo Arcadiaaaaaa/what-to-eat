@@ -602,3 +602,22 @@ footer p { margin: 0; }
   .stats-grid { grid-template-columns: 1fr; }
   .stat-cards { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ---------- 店名 / 位置（v0.8.1） ---------- */
+.field.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); }
+.field.two-col label { display: grid; gap: var(--space-1); }
+@media (max-width: 480px) { .field.two-col { grid-template-columns: 1fr; } }
+.shop-chip {
+  font-size: 12px; line-height: 18px; color: var(--ink); background: var(--paper-sunk);
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 0 var(--space-2); flex: none; max-width: 46%; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.wc-loc {
+  margin: var(--space-2) 0 0; font-size: 12.5px; line-height: 18px; color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+.ri-shop {
+  margin: var(--space-1) 0 0 calc(var(--space-2) * 3);
+  font-size: 12.5px; line-height: 18px; color: var(--ink-soft); overflow-wrap: anywhere;
+}
