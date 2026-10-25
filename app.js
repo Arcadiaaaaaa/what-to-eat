@@ -259,16 +259,7 @@
 
   const drinksForMeal = (meal) => candidatesFor(meal, 'drink').map((c) => c.entity);
 
-  // 累计概率抽样（模块未导出内部 draw，此处等价实现）
-  const drawRow = (rows) => {
-    const u = Math.random();
-    let cum = 0;
-    for (const r of rows) {
-      cum += r.probability;
-      if (u < cum) return r;
-    }
-    return rows[rows.length - 1];
-  };
+  // 累计概率抽样已在模块导出（MealRandom.draw），直接使用
 
   // 窗口内按菜品偏好权重不放回抽 K 道菜（偏好机制与实体级一致）
   function weightedDishes(w, k) {
@@ -276,7 +267,7 @@
     const picked = [];
     while (picked.length < k && pool.length) {
       const rows = MealRandom.distribution(pool, {});
-      const chosen = drawRow(rows);
+      const chosen = MealRandom.draw(rows, Math.random);
       picked.push(chosen.entity);
       pool.splice(pool.findIndex((c) => c.key === chosen.key), 1);
     }
@@ -286,14 +277,6 @@
   const blockedCountFor = (meal) =>
     state.items.filter((i) => i.meals.includes(meal) && MealRandom.readPreference(i).blocked).length
     + state.windows.filter((w) => w.meals.includes(meal) && MealRandom.readPreference(w).blocked).length;
-
-  // 一口价优先；否则按菜价合计（任一菜未标价则视为未知）
-  function windowPrice(w, k, dishes) {
-    const fixed = w.fixedPrices && w.fixedPrices[k];
-    if (typeof fixed === 'number') return fixed;
-    if (dishes.some((d) => d.price == null)) return null;
-    return Math.round(dishes.reduce((acc, d) => acc + d.price, 0) * 100) / 100;
-  }
 
   // ---------- 提示 ----------
   function toast(msg) {
@@ -569,22 +552,6 @@
     return `${pf.lo === 0 ? '¥0' : `¥${fmt(pf.lo)}`}–${pf.hi === Infinity ? '不限' : `¥${fmt(pf.hi)}`}`;
   }
 
-  // 窗口某拼法的可能价格范围 [最低, 最高]；一口价则两点相同；菜价未知则返回 null
-  function windowPriceRange(w, k) {
-    const fixed = w.fixedPrices && w.fixedPrices[k];
-    if (typeof fixed === 'number') return [fixed, fixed];
-    const dishes = eligibleDishes(w);
-    if (dishes.some((d) => d.price == null)) return null;
-    const ps = dishes.map((d) => d.price).sort((a, b) => a - b);
-    let lo = 0;
-    let hi = 0;
-    for (let i = 0; i < k; i += 1) {
-      lo += ps[i];
-      hi += ps[ps.length - 1 - i];
-    }
-    return [Math.round(lo * 100) / 100, Math.round(hi * 100) / 100];
-  }
-
   function roll() {
     if (rolling) return;
     const pfRaw = readPriceFilter();
@@ -593,137 +560,89 @@
       return;
     }
     const pf = pfRaw;
-    const pfLabel = pf ? ` ${boundsLabel(pf)}` : '';
-    const slotsWanted = currentMode === 'combo' ? ['food', 'drink'] : [currentMode];
 
-    // 每槽位：候选池（忌口已在模块内剔除）→ 价格粗过滤 → 分布
-    // （偏好权重含时间衰减 + 软防连抽 ×0.5 + 10% 均匀探索，先过滤后加权）
-    const dists = {};
-    const emptyNotes = {};
-    for (const slot of slotsWanted) {
-      let pool = MealRandom.candidates(state, currentMeal, slot);
-      if (pf) {
-        pool = pool.filter((c) => {
-          if (c.kind === 'window') {
-            return validKs(c.entity).some((k) => {
-              const r = windowPriceRange(c.entity, k);
-              if (!r) return false;
-              // 组合模式下限交给合计判定，预过滤只看能否不超过上限
-              return r[0] <= pf.hi && (currentMode === 'combo' ? true : r[1] >= pf.lo);
-            });
-          }
-          const p = c.entity.price;
-          if (p == null) return false;
-          if (p > pf.hi) return false;
-          return currentMode === 'combo' ? true : p >= pf.lo;
-        });
-      }
-      dists[slot] = MealRandom.distribution(pool, { lastKey: last[`${currentMeal}:${slot}`] });
-      if (!dists[slot].length) {
-        const kindLabel = slot === 'food' ? '餐品 / 窗口' : '饮品';
-        emptyNotes[slot] = pf
-          ? `价格区间${pfLabel} 内没有可选的${kindLabel}`
-          : `该餐段暂无${kindLabel}`;
+    // 过滤（先过滤后加权）、组合约束（精确枚举，有解必出）、窗口落定全部由模块完成
+    let r;
+    for (let t = 0; t < 5; t += 1) {
+      r = MealRandom.recommend(state, {
+        meal: currentMeal, mode: currentMode, last, priceRange: pf,
+      });
+      const badDish = r.food && r.food.dishes
+        && r.food.dishes.some((d) => MealRandom.readPreference(d).blocked);
+      if (!badDish) break; // 忌口菜混入组合时整次重抽（模块不知晓菜品级忌口）
+    }
+
+    // 菜品偏好参与窗口抽菜：模块内部按均匀抽菜，这里在价格仍满足的前提下
+    // 用菜品权重重抽；重抽后越界则保留模块的精确解
+    if (r.food && r.food.kind === 'window' && r.food.dishes && r.food.entity) {
+      const win = r.food.entity;
+      const k = r.food.k;
+      const elig = eligibleDishes(win);
+      const weightsMatter = elig.some((d) => MealRandom.weight(d) !== 1);
+      if ((weightsMatter || elig.length !== win.dishes.length) && elig.length >= k) {
+        const candidate = weightedDishes(win, k);
+        const fixed = win.fixedPrices && win.fixedPrices[k];
+        const cprice = typeof fixed === 'number'
+          ? fixed
+          : (candidate.some((d) => d.price == null)
+            ? null
+            : Math.round(candidate.reduce((acc, d) => acc + d.price, 0) * 100) / 100);
+        let ok = !r.priceRange;
+        if (r.priceRange && cprice != null) {
+          const total = r.drink && r.drink.price != null ? cprice + r.drink.price : cprice;
+          ok = total >= r.priceRange.lo - 1e-9 && total <= r.priceRange.hi + 1e-9;
+        }
+        if (ok) r.food = { ...r.food, dishes: candidate, price: cprice };
       }
     }
 
-    if (slotsWanted.every((s) => emptyNotes[s])) {
-      const blocked = blockedCountFor(currentMeal);
-      const msg = blocked && !pf
-        ? `可随机条目都被忌口了（${blocked} 个），去设置-偏好与忌口恢复`
-        : emptyNotes[slotsWanted[0]];
-      toast(msg);
-      const resultEl = $('#result');
-      resultEl.textContent = '';
-      resultEl.appendChild(el('p', 'placeholder', msg));
-      return;
-    }
-
-    // 抽中窗口后的落定：拼法限制在价格可行的范围内（预过滤保证至少一种）
-    const materialize = (chosen) => {
-      const e = chosen.entity;
-      if (chosen.kind === 'item') {
-        return {
-          kind: 'item', entity: e, name: e.name, sub: null,
-          price: e.price, tag: TYPE_LABEL[e.type], tagClass: e.type,
-        };
+    const slotLabel = (s) => (s === 'food' ? '餐品 / 窗口' : '饮品');
+    const rangeLabel = r.priceRange ? ` ${boundsLabel(r.priceRange)}` : '';
+    let partialNote = null;
+    if (r.status === 'empty' || r.status === 'partial') {
+      const notes = r.emptySlots.map((s) => (r.priceBlocked
+        ? `价格区间${rangeLabel} 内没有可选的${slotLabel(s)}，试试放宽区间`
+        : `该餐段暂无${slotLabel(s)}`));
+      if (r.status === 'empty') {
+        const blocked = blockedCountFor(currentMeal);
+        const msg = !r.priceBlocked && blocked
+          ? `可随机条目都被忌口了（${blocked} 个），去设置-偏好与忌口恢复`
+          : (notes[0] || '先去设置录入一些条目吧');
+        toast(msg);
+        const resultEl = $('#result');
+        resultEl.textContent = '';
+        resultEl.appendChild(el('p', 'placeholder', msg));
+        return;
       }
-      let ks = validKs(e);
-      if (pf) {
-        ks = ks.filter((k) => {
-          const r = windowPriceRange(e, k);
-          return !!r && r[0] <= pf.hi && (currentMode === 'combo' ? true : r[1] >= pf.lo);
-        });
-      }
-      const k = ks[Math.floor(Math.random() * ks.length)];
-      const dishes = weightedDishes(e, k);
-      return {
-        kind: 'window', entity: e, name: dishes.map((d) => d.name).join(' + '), sub: e.name,
-        price: windowPrice(e, k, dishes), tag: K_LABEL[k], tagClass: 'window',
-        k, dishes,
-      };
-    };
-
-    // 价格约束用拒绝采样：得到的是「价格可行」条件下的分布。
-    // 软防连抽不会排除候选，因此不存在无解死循环；上限尝试只防区间本身无解。
-    const MAX_TRIES = 40;
-    const tries = pf ? MAX_TRIES : 1;
-    let drawn = null;
-    let failMsg = null;
-    for (let attempt = 0; attempt < tries && !drawn; attempt += 1) {
-      const out = {};
-      for (const slot of slotsWanted) {
-        if (!dists[slot].length) continue;
-        const chosen = drawRow(dists[slot]);
-        out[slot] = materialize(chosen);
-        out[slot].slot = slot;
-        out[slot].meta = { weight: chosen.weight, probability: chosen.probability, key: chosen.key };
-      }
-      if (!pf) { drawn = out; break; }
-      const picks = slotsWanted.filter((s) => out[s]);
-      const prices = picks.map((s) => out[s].price);
-      const ok = prices.length === picks.length // 有未知价格则不可行（预过滤后理论上不会出现）
-        && (picks.length > 1
-          ? prices.reduce((a, b) => a + b, 0) <= pf.hi + 1e-9 && prices.reduce((a, b) => a + b, 0) >= pf.lo - 1e-9
-          : prices[0] >= pf.lo - 1e-9 && prices[0] <= pf.hi + 1e-9);
-      if (ok) drawn = out;
-      else if (attempt === tries - 1) {
-        failMsg = `价格区间${pfLabel} 内凑不出${picks.length > 1 ? '餐品 + 饮品组合' : '结果'}，试试放宽区间或切换模式`;
-      }
-    }
-
-    if (!drawn) {
-      toast(failMsg || '先去设置录入一些条目吧');
-      const resultEl = $('#result');
-      resultEl.textContent = '';
-      resultEl.appendChild(el('p', 'placeholder', failMsg || '先去设置录入一些条目吧'));
-      return;
+      partialNote = notes.join('，'); // partial：正常出结果，缺失槽位写入备注
     }
 
     // 写入历史（含上轮指针），页面刷新后可恢复继续微调/反馈
     const record = {
       id: uid(), ts: Date.now(), meal: currentMeal, mode: currentMode, adjusted: false,
-      note: slotsWanted.filter((s) => emptyNotes[s]).map((s) => emptyNotes[s]).join('，') || null,
+      note: partialNote,
       votes: { dishes: {} },
       food: null, drink: null,
     };
-    for (const slot of slotsWanted) {
-      if (!drawn[slot]) continue;
-      last[`${currentMeal}:${slot}`] = drawn[slot].meta.key;
-      if (drawn[slot].kind === 'window') {
+    for (const slot of ['food', 'drink']) {
+      const pick = r[slot];
+      if (!pick) continue;
+      const meta = { weight: pick.weight, probability: pick.probability, key: pick.key };
+      if (pick.kind === 'window') {
         record.food = {
-          kind: 'window', entityId: drawn[slot].entity.id, name: drawn[slot].entity.name,
-          k: drawn[slot].k, tag: drawn[slot].tag,
-          dishes: drawn[slot].dishes.map((d) => ({ id: d.id, name: d.name, price: d.price })),
-          price: drawn[slot].price, meta: drawn[slot].meta,
+          kind: 'window', entityId: pick.entity.id, name: pick.entity.name,
+          k: pick.k, tag: K_LABEL[pick.k] || '拼',
+          dishes: pick.dishes.map((d) => ({ id: d.id, name: d.name, price: d.price })),
+          price: pick.price, meta,
         };
       } else {
         record[slot] = {
-          kind: 'item', entityId: drawn[slot].entity.id, name: drawn[slot].name,
-          price: drawn[slot].price, meta: drawn[slot].meta,
+          kind: 'item', entityId: pick.entity.id, name: pick.entity.name,
+          price: pick.price, meta,
         };
       }
     }
+    last = r.nextLast; // 结果正式展示，采用新的上轮指针
     state.history.unshift(record);
     state.history = state.history.slice(0, 30);
     save();
@@ -731,16 +650,17 @@
 
     // 滚动动画：先出骨架，落定后渲染可微调的结果卡片
     const animateFor = (slot) => {
-      const rows = dists[slot] || [];
+      const rows = candidatesFor(currentMeal, slot);
       return () => {
         const c = rows[Math.floor(Math.random() * rows.length)];
+        if (!c) return '······';
         if (c.kind === 'item') return c.entity.name;
         const ks2 = validKs(c.entity);
         const k2 = ks2[Math.floor(Math.random() * ks2.length)];
         return MealRandom.sampleDishes(eligibleDishes(c.entity), k2).map((d) => d.name).join(' + ');
       };
     };
-    const slots = ['food', 'drink'].filter((s) => drawn[s]);
+    const slots = ['food', 'drink'].filter((s) => r[s]);
 
     const meal = MEALS[currentMeal];
     const result = $('#result');
@@ -752,7 +672,7 @@
     const nameEls = [];
     slots.forEach((s) => {
       const row = el('div', 'result-item');
-      row.appendChild(el('span', `tag ${drawn[s].tagClass}`, drawn[s].tag));
+      row.appendChild(el('span', `tag ${r[s].kind === 'window' ? 'window' : s === 'food' ? 'food' : 'drink'}`, record[s].tag));
       const nameEl = el('span', 'name rolling', '······');
       row.appendChild(nameEl);
       wrap.appendChild(row);
@@ -958,7 +878,11 @@
       row.appendChild(el('span', 'price', rec.price == null ? '价格未知' : `¥${fmt(rec.price)}`));
       const entity = liveEntity(rec.entityId);
       if (entity) {
-        currentResult[slot] = { entity, price: rec.price };
+        // key 供模块 vote/undoVote 在 state 中定位实体
+        currentResult[slot] = {
+          entity, price: rec.price,
+          key: `${rec.kind === 'window' ? 'window' : 'item'}:${rec.entityId}`,
+        };
         row.appendChild(buildFbGroup(slot, rec.meta));
       }
       card.appendChild(row);
@@ -1471,7 +1395,7 @@
       const undoBtn = e.target.closest('.fb-btn[data-undo]');
       if (undoBtn) {
         const slot = undoBtn.dataset.undo;
-        if (currentResult && currentResult.votes[slot] && MealRandom.undoVote(currentResult, slot)) {
+        if (currentResult && currentResult.votes[slot] && MealRandom.undoVote(state, currentResult, slot)) {
           if (currentRecord) delete currentRecord.votes[slot];
           save();
           toast('已撤销该条反馈');
@@ -1552,24 +1476,31 @@
         toast('本条结果已反馈过，先点撤销可改选');
         return;
       }
+      const entity = liveEntity(currentRecord[slot].entityId);
+      const blockedEntity = !!(entity && MealRandom.readPreference(entity).blocked && action !== 'block');
+      let ok = false;
       try {
-        if (MealRandom.vote(currentResult, slot, action)) {
-          currentResult.votes[slot].action = action;
-          currentRecord.votes[slot] = { action };
-          save();
-          const entity = currentResult[slot].entity;
-          const msgs = {
-            like: '已记录：以后多推荐',
-            dislike: '已记录：以后少推荐',
-            block: '已加入忌口（设置-偏好与忌口可恢复）',
-          };
-          toast(`${msgs[action]}「${entity.name}」`);
-          updateFbUI(slot);
-          renderAll();
-        }
+        ok = MealRandom.vote(state, currentResult, slot, action);
       } catch (err) {
         toast(String(err.message || err));
       }
+      if (!ok) {
+        if (blockedEntity) toast(`「${entity.name}」已忌口，先在设置-偏好与忌口恢复默认`);
+        else toast('反馈失败：该条目可能已被删除');
+        return;
+      }
+      currentResult.votes[slot].action = action;
+      currentRecord.votes[slot] = { action };
+      save();
+      const votedEntity = currentResult[slot].entity;
+      const msgs = {
+        like: '已记录：以后多推荐',
+        dislike: '已记录：以后少推荐',
+        block: '已加入忌口（设置-偏好与忌口可恢复）',
+      };
+      toast(`${msgs[action]}「${votedEntity.name}」`);
+      updateFbUI(slot);
+      renderAll();
     });
 
     $('#prefList').addEventListener('click', (e) => {
