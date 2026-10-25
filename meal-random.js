@@ -140,42 +140,204 @@ const MealRandom = (() => {
     return { ...chosen, k, dishes, price };
   }
 
+  // ---------- 价格区间（硬过滤，未知价格不合格） ----------
+  function checkRange(r) {
+    if (r == null) return null;
+    const lo = r.lo ?? 0;
+    const hi = r.hi ?? Infinity;
+    if (!Number.isFinite(lo) || lo < 0 || Number.isNaN(hi) || hi < lo) {
+      throw new RangeError('priceRange 需满足 0 ≤ lo ≤ hi');
+    }
+    return { lo, hi };
+  }
+
+  // 以分比较，避免 0.1 + 0.2 之类的尾差把边界上的价格判出区间。
+  const cents = (x) => Math.round(x * 100);
+  const inRange = (p, r) => p !== null && cents(p) >= cents(r.lo) && cents(p) <= cents(r.hi);
+
+  function combinations(arr, k, start = 0, acc = [], out = []) {
+    if (acc.length === k) { out.push(acc.slice()); return out; }
+    for (let i = start; i <= arr.length - (k - acc.length); i++) {
+      acc.push(arr[i]);
+      combinations(arr, k, i + 1, acc, out);
+      acc.pop();
+    }
+    return out;
+  }
+
+  // 候选的全部具体配置，按 K 分组。一口价的 K 只占一项，抽中后再洗牌选菜；
+  // 否则枚举该 K 的菜品子集。组内均匀、组间均匀，与无区间时的分层抽样一致。
+  function expand(c) {
+    const e = c.entity;
+    if (c.kind === 'item') {
+      return { ...c, groups: [{ k: null, options: [{ price: sumMoney([e.price]), dishes: null }] }] };
+    }
+    return {
+      ...c,
+      groups: validKs(e).map((k) => {
+        const fixed = e.fixedPrices?.[k];
+        if (knownPrice(fixed)) return { k, options: [{ price: sumMoney([fixed]), dishes: null }] };
+        return {
+          k,
+          options: combinations(e.dishes, k)
+            .map((dishes) => ({ price: sumMoney(dishes.map((d) => d.price)), dishes })),
+        };
+      }),
+    };
+  }
+
+  // 只保留满足 keep 的配置；一个可行配置都没有的实体退出候选池（先过滤，后加权）。
+  const narrow = (expanded, keep) => expanded
+    .map((c) => ({
+      ...c,
+      groups: c.groups.map((g) => ({ ...g, options: g.options.filter(keep) }))
+        .filter((g) => g.options.length),
+    }))
+    .filter((c) => c.groups.length);
+
+  const pick = (arr, rng) => arr[Math.floor(unit(rng) * arr.length)];
+
+  function finish(row, group, option, rng, probability = row.probability) {
+    const { groups, ...out } = row;
+    if (row.kind === 'item') return { ...out, probability, price: option.price };
+    const dishes = option.dishes || sampleDishes(row.entity.dishes, group.k, rng);
+    return { ...out, probability, k: group.k, dishes, price: option.price };
+  }
+
+  // 单槽：按单价过滤后加权抽实体，再在其可行配置里均匀选 K、均匀选菜品子集。
+  function drawInRange(pool, opts, range, rng) {
+    const rows = distribution(narrow(pool.map(expand), (o) => inRange(o.price, range)), opts);
+    const chosen = draw(rows, rng);
+    if (!chosen) return null;
+    const group = pick(chosen.groups, rng);
+    return finish(chosen, group, pick(group.options, rng), rng);
+  }
+
+  // 组合：按合计过滤。P(f, d | 可行) ∝ P_F(f) × P_D(d) × 1[合计在区间内]，
+  // P_F 含实体概率与实体内配置概率。精确枚举，不用拒绝采样，有解就一定抽得到。
+  function drawPair(foodPool, drinkPool, foodOpts, drinkOpts, range, rng) {
+    const sum = (a, b) => sumMoney([a, b]);
+    const foodAll = narrow(foodPool.map(expand), (o) => o.price !== null);
+    const drinkAll = narrow(drinkPool.map(expand), (o) => o.price !== null);
+    const priceList = (xs) => xs.flatMap((c) => c.groups.flatMap((g) => g.options.map((o) => o.price)));
+    const foodPrices = priceList(foodAll);
+    const drinkPrices = priceList(drinkAll);
+    const foodRows = distribution(
+      narrow(foodAll, (o) => drinkPrices.some((p) => inRange(sum(o.price, p), range))), foodOpts);
+    const drinkRows = distribution(
+      narrow(drinkAll, (o) => foodPrices.some((p) => inRange(sum(o.price, p), range))), drinkOpts);
+    if (!foodRows.length || !drinkRows.length) return null;
+
+    const configs = [];
+    const drinkMass = new Map();
+    let total = 0;
+    for (const row of foodRows) {
+      for (const group of row.groups) {
+        for (const option of group.options) {
+          const pF = row.probability / row.groups.length / group.options.length;
+          let mass = 0;
+          for (const d of drinkRows) {
+            if (!inRange(sum(option.price, d.groups[0].options[0].price), range)) continue;
+            mass += pF * d.probability;
+            drinkMass.set(d, (drinkMass.get(d) || 0) + pF * d.probability);
+          }
+          configs.push({ row, group, option, mass });
+          total += mass;
+        }
+      }
+    }
+    // 先按边际抽食物配置，再按条件分布抽饮品，等价于直接抽可行组合。
+    const u = unit(rng) * total;
+    let acc = 0;
+    let f = configs[configs.length - 1];
+    for (const c of configs) {
+      acc += c.mass;
+      if (u < acc) { f = c; break; }
+    }
+    const fits = drinkRows.filter((d) => inRange(sum(f.option.price, d.groups[0].options[0].price), range));
+    const dTotal = fits.reduce((s, d) => s + d.probability, 0);
+    const v = unit(rng) * dTotal;
+    acc = 0;
+    let d = fits[fits.length - 1];
+    for (const x of fits) {
+      acc += x.probability;
+      if (v < acc) { d = x; break; }
+    }
+    const foodProb = configs.filter((c) => c.row === f.row).reduce((s, c) => s + c.mass, 0) / total;
+    return {
+      food: finish(f.row, f.group, f.option, rng, foodProb),
+      drink: finish(d, d.groups[0], d.groups[0].options[0], rng, drinkMass.get(d) / total),
+    };
+  }
+
   // 纯抽样：不写偏好、不修改 last。结果正式展示后，调用方采用 nextLast。
+  // priceRange 为 { lo, hi } 或 null：仅餐品/仅饮品按单价，组合按餐品 + 饮品合计；
+  // 组合中某槽本就无候选时，另一槽按单价约束。
   function recommend(data, {
-    meal, mode = 'combo', last = {}, now = Date.now(), rng = Math.random,
+    meal, mode = 'combo', last = {}, now = Date.now(), rng = Math.random, priceRange = null,
   } = {}) {
     if (!['breakfast', 'lunch', 'dinner'].includes(meal)) throw new TypeError('未知餐段');
     if (!['combo', 'food', 'drink'].includes(mode)) throw new TypeError('未知推荐模式');
     checkTime(now);
+    const range = checkRange(priceRange);
     const slots = mode === 'combo' ? ['food', 'drink'] : [mode];
-    const result = { food: null, drink: null, nextLast: { ...last }, votes: {} };
-    for (const slot of slots) {
-      const scope = `${meal}:${slot}`;
-      const rows = distribution(candidates(data, meal, slot), { lastKey: last[scope], now });
-      const chosen = draw(rows, rng);
-      if (!chosen) continue;
-      result[slot] = materialize(chosen, rng);
-      result.nextLast[scope] = chosen.key;
+    const result = { food: null, drink: null, nextLast: { ...last }, votes: {}, priceRange: range };
+    const pools = Object.fromEntries(slots.map((s) => [s, candidates(data, meal, s)]));
+    const opts = (slot) => ({ lastKey: last[`${meal}:${slot}`], now });
+    const picks = {};
+    if (!range) {
+      for (const slot of slots) {
+        const chosen = draw(distribution(pools[slot], opts(slot)), rng);
+        if (chosen) picks[slot] = materialize(chosen, rng);
+      }
+    } else if (slots.length === 2 && pools.food.length && pools.drink.length) {
+      Object.assign(picks, drawPair(pools.food, pools.drink, opts('food'), opts('drink'), range, rng));
+    } else {
+      for (const slot of slots) {
+        const chosen = drawInRange(pools[slot], opts(slot), range, rng);
+        if (chosen) picks[slot] = chosen;
+      }
     }
-    const picks = slots.map((s) => result[s]).filter(Boolean);
+    for (const slot of slots) {
+      if (!picks[slot]) continue;
+      result[slot] = picks[slot];
+      result.nextLast[`${meal}:${slot}`] = picks[slot].key;
+    }
+    const chosen = slots.map((s) => result[s]).filter(Boolean);
+    const known = chosen.filter((p) => p.price !== null);
     result.emptySlots = slots.filter((s) => !result[s]);
-    result.status = !picks.length ? 'empty' : result.emptySlots.length ? 'partial' : 'ok';
-    result.knownSubtotal = sumMoney(picks.filter((p) => p.price !== null).map((p) => p.price));
-    result.totalPrice = result.status === 'ok' ? sumMoney(picks.map((p) => p.price)) : null;
+    result.status = !chosen.length ? 'empty' : result.emptySlots.length ? 'partial' : 'ok';
+    // 有候选却因区间落空：提示放宽区间，而不是去录入。
+    result.priceBlocked = range !== null && result.emptySlots.some((s) => pools[s].length > 0);
+    result.knownSubtotal = known.length ? sumMoney(known.map((p) => p.price)) : null;
+    result.totalPrice = result.status === 'ok' ? sumMoney(chosen.map((p) => p.price)) : null;
     return result;
   }
 
+  // 按 key 回到当前菜单找实体：结果卡片可能比菜单活得久（编辑、删除、重新载入）。
+  function findEntity(data, key) {
+    const i = key.indexOf(':');
+    const list = key.slice(0, i) === 'window' ? data.windows : data.items;
+    return (list || []).find((e) => e.id === key.slice(i + 1)) || null;
+  }
+
   // 一次结果的每个实体最多反馈一次；想改选，先撤销。
-  function vote(result, slot, action, now = Date.now()) {
+  // 实体已删除，或已在别处设为忌口（再赞/踩无意义）时返回 false，不抛错。
+  function vote(data, result, slot, action, now = Date.now()) {
     if (!['food', 'drink'].includes(slot)) throw new TypeError('未知槽位');
     if (!result[slot] || result.votes[slot]) return false;
-    result.votes[slot] = applyFeedback(result[slot].entity, action, now);
+    const entity = findEntity(data, result[slot].key);
+    if (!entity) return false;
+    if (readPreference(entity).blocked && action !== 'block') return false;
+    result.votes[slot] = applyFeedback(entity, action, now);
     return true;
   }
 
-  function undoVote(result, slot) {
+  function undoVote(data, result, slot) {
     if (!['food', 'drink'].includes(slot)) throw new TypeError('未知槽位');
-    if (!undoFeedback(result.votes[slot])) return false;
+    const receipt = result.votes[slot];
+    if (!receipt || findEntity(data, result[slot].key) !== receipt.entity) return false;
+    if (!undoFeedback(receipt)) return false;
     delete result.votes[slot];
     return true;
   }

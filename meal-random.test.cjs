@@ -218,17 +218,149 @@ test('结果反馈每槽只计一次，撤销后可重选；窗口反馈不连�
   const w = win();
   const data = { items: [item('d', 'drink', 2)], windows: [w] };
   const r = R.recommend(data, { meal: 'lunch', mode: 'combo', now: NOW, rng: () => 0 });
-  assert.equal(R.vote(r, 'food', 'dislike', NOW), true);
-  assert.equal(R.vote(r, 'food', 'dislike', NOW), false);
-  assert.equal(R.vote(r, 'food', 'like', NOW), false);
+  assert.equal(R.vote(data, r, 'food', 'dislike', NOW), true);
+  assert.equal(R.vote(data, r, 'food', 'dislike', NOW), false);
+  assert.equal(R.vote(data, r, 'food', 'like', NOW), false);
   close(R.weight(w, NOW), 0.4);
   assert.ok(w.dishes.every((d) => d.preference === undefined));
-  assert.equal(R.vote(r, 'drink', 'like', NOW), true);
+  assert.equal(R.vote(data, r, 'drink', 'like', NOW), true);
   close(R.weight(data.items[0], NOW), 1.25);
-  assert.equal(R.undoVote(r, 'food'), true);
+  assert.equal(R.undoVote(data, r, 'food'), true);
   close(R.weight(w, NOW), 1);
-  assert.equal(R.vote(r, 'food', 'like', NOW), true);
+  assert.equal(R.vote(data, r, 'food', 'like', NOW), true);
   close(R.weight(w, NOW), 1.25);
+});
+
+test('反馈按 key 写回当前菜单中的实体；菜单对象被替换或删除后不写进孤儿对象', () => {
+  const data = { items: [item('a')], windows: [] };
+  const r = R.recommend(data, { meal: 'lunch', mode: 'food', now: NOW, rng: () => 0 });
+  data.items = data.items.map((o) => ({ ...o })); // 模拟重新载入 / 清洗
+  assert.equal(R.vote(data, r, 'food', 'dislike', NOW), true);
+  close(R.weight(data.items[0], NOW), 0.4);
+  data.items = data.items.map((o) => ({ ...o, preference: { ...o.preference } }));
+  assert.equal(R.undoVote(data, r, 'food'), false); // 凭据指向旧对象，不能假装撤销成功
+  close(R.weight(data.items[0], NOW), 0.4);
+  const r2 = R.recommend(data, { meal: 'lunch', mode: 'food', now: NOW, rng: () => 0 });
+  data.items = [];
+  assert.equal(R.vote(data, r2, 'food', 'like', NOW), false);
+});
+
+test('结果展示后实体在设置中被忌口：赞/踩返回 false 而非抛错，忌口仍可提交', () => {
+  const data = { items: [item('a')], windows: [] };
+  const r = R.recommend(data, { meal: 'lunch', mode: 'food', now: NOW, rng: () => 0 });
+  R.applyFeedback(data.items[0], 'block', NOW);
+  assert.equal(R.vote(data, r, 'food', 'dislike', NOW), false);
+  assert.equal(R.vote(data, r, 'food', 'block', NOW), true);
+  close(R.weight(data.items[0], NOW), 0);
+});
+
+test('没有任何已知价格时 knownSubtotal 为 null，而不是 ¥0', () => {
+  const options = { meal: 'lunch', mode: 'combo', now: NOW, rng: () => 0 };
+  assert.equal(R.recommend({ items: [], windows: [] }, options).knownSubtotal, null);
+  const r = R.recommend({ items: [item('f', 'food', null)], windows: [] }, options);
+  assert.equal(r.status, 'partial');
+  assert.equal(r.knownSubtotal, null);
+});
+
+// ---------- 价格区间 ----------
+// 确定性伪随机源，用于频率检验。
+const lcg = (seed = 1) => () => {
+  seed = (seed * 1664525 + 1013904223) >>> 0;
+  return seed / 2 ** 32;
+};
+
+test('单槽区间按单价过滤；未知价格不参与；无合格项时 priceBlocked', () => {
+  const data = { items: [item('a', 'food', 8), item('b', 'food', 15), item('u', 'food', null)], windows: [] };
+  const base = { meal: 'lunch', mode: 'food', now: NOW };
+  for (const u of [0, 0.5, 0.999]) {
+    const r = R.recommend(data, { ...base, rng: () => u, priceRange: { lo: 10, hi: 20 } });
+    assert.equal(r.food.key, 'item:b');
+    close(r.food.probability, 1);
+  }
+  const none = R.recommend(data, { ...base, rng: () => 0, priceRange: { lo: 30, hi: 40 } });
+  assert.equal(none.status, 'empty');
+  assert.equal(none.priceBlocked, true);
+  const noMenu = R.recommend({ items: [], windows: [] }, { ...base, priceRange: { lo: 0, hi: 5 } });
+  assert.equal(noMenu.priceBlocked, false);
+});
+
+test('区间内窗口只拼出可行的 K 与菜品子集；一口价按 K 判定', () => {
+  const w = win(); // 菜价 7/6/5，双拼一口价 12，三拼按合计 18
+  const data = { items: [], windows: [w] };
+  const base = { meal: 'lunch', mode: 'food', now: NOW };
+  for (const u of [0, 0.3, 0.7, 0.999]) {
+    const r = R.recommend(data, { ...base, rng: () => u, priceRange: { lo: 0, hi: 12 } });
+    assert.equal(r.food.k, 2);
+    assert.equal(r.food.price, 12);
+    assert.equal(new Set(r.food.dishes.map((d) => d.id)).size, 2);
+    assert.equal(R.recommend(data, { ...base, rng: () => u, priceRange: { lo: 13, hi: 20 } }).food.price, 18);
+  }
+  delete w.fixedPrices[2]; // 双拼按菜价：13 / 12 / 11，只有 6 + 5 = 11 合格
+  const r = R.recommend(data, { ...base, rng: () => 0.5, priceRange: { lo: 0, hi: 11 } });
+  assert.deepEqual(r.food.dishes.map((d) => d.id).sort(), ['d2', 'd3']);
+  assert.equal(r.food.price, 11);
+});
+
+test('稀有可行组合也一定能抽到（v0.4 拒绝采样 40 次可能误报凑不出）', () => {
+  const dishes = Array.from({ length: 12 }, (_, i) => ({ id: `d${i}`, name: `菜${i}`, price: i < 2 ? 1 : 10 }));
+  const w = { id: 'w', name: 'w', meals: ['lunch'], pickOptions: [2], fixedPrices: {}, dishes };
+  const rng = lcg(7);
+  for (let i = 0; i < 50; i++) {
+    const r = R.recommend({ items: [], windows: [w] }, {
+      meal: 'lunch', mode: 'food', now: NOW, rng, priceRange: { lo: 0, hi: 2 },
+    });
+    assert.deepEqual(r.food.dishes.map((d) => d.id).sort(), ['d0', 'd1']);
+  }
+});
+
+test('组合区间按合计取条件分布：概率精确且与抽样频率一致', () => {
+  // 可行组合：10+2、10+6、15+2；15+6=21 超出。中性权重下三者各 1/3。
+  const data = {
+    items: [item('f10', 'food', 10), item('f15', 'food', 15), item('d2', 'drink', 2), item('d6', 'drink', 6)],
+    windows: [],
+  };
+  const options = { meal: 'lunch', mode: 'combo', now: NOW, priceRange: { lo: 12, hi: 17 } };
+  const first = R.recommend(data, { ...options, rng: () => 0 });
+  assert.equal(first.status, 'ok');
+  close(first.food.probability, 2 / 3);
+  close(first.drink.probability, 2 / 3);
+  const rng = lcg(42);
+  const seen = {};
+  const n = 30000;
+  for (let i = 0; i < n; i++) {
+    const r = R.recommend(data, { ...options, rng });
+    const t = r.totalPrice;
+    assert.ok(t >= 12 && t <= 17);
+    const pair = `${r.food.key}+${r.drink.key}`;
+    seen[pair] = (seen[pair] || 0) + 1;
+  }
+  assert.equal(Object.keys(seen).length, 3);
+  Object.values(seen).forEach((c) => assert.ok(Math.abs(c / n - 1 / 3) < 0.015, `${c / n}`));
+});
+
+test('组合区间：两槽都有候选但凑不出时为空；某槽本就无候选时另一槽按单价约束', () => {
+  const data = { items: [item('f', 'food', 10), item('d', 'drink', 5)], windows: [] };
+  const options = { meal: 'lunch', mode: 'combo', now: NOW, rng: () => 0 };
+  const none = R.recommend(data, { ...options, priceRange: { lo: 0, hi: 12 } });
+  assert.equal(none.status, 'empty');
+  assert.equal(none.priceBlocked, true);
+  assert.deepEqual(none.nextLast, {});
+  const foodOnly = { items: [item('f', 'food', 10), item('g', 'food', 20)], windows: [] };
+  const r = R.recommend(foodOnly, { ...options, priceRange: { lo: 15, hi: 25 } });
+  assert.equal(r.status, 'partial');
+  assert.equal(r.food.key, 'item:g');
+  assert.equal(r.priceBlocked, false);
+});
+
+test('区间边界以分比较；非法区间明确报错', () => {
+  const data = { items: [item('f', 'food', 0.1), item('d', 'drink', 0.2)], windows: [] };
+  const r = R.recommend(data, {
+    meal: 'lunch', mode: 'combo', now: NOW, rng: () => 0, priceRange: { lo: 0.3, hi: 0.3 },
+  });
+  assert.equal(r.totalPrice, 0.3);
+  for (const bad of [{ lo: 5, hi: 1 }, { lo: -1, hi: 3 }, { lo: NaN }]) {
+    assert.throws(() => R.recommend(data, { meal: 'lunch', now: NOW, priceRange: bad }), RangeError);
+  }
 });
 
 test('非法随机源、非法 K 和非法调用参数明确报错', () => {
