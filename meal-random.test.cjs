@@ -372,3 +372,10 @@ test('非法随机源、非法 K 和非法调用参数明确报错', () => {
   assert.throws(() => R.recommend(data, { meal: 'invalid', mode: 'food' }), TypeError);
   assert.throws(() => R.recommend(data, { meal: 'lunch', mode: 'invalid' }), TypeError);
 });
+
+test('导出 draw 供页面自行抽样；vote 拒绝缺少 key 的手拼结果', () => {
+  const rows = R.distribution(R.candidates({ items: [item('a'), item('b')], windows: [] }, 'lunch', 'food'), { now: NOW });
+  assert.equal(R.draw(rows, () => 0.5).key, 'item:b');
+  const data = { items: [item('a')], windows: [] };
+  assert.throws(() => R.vote(data, { food: { entity: data.items[0] }, votes: {} }, 'food', 'like', NOW), TypeError);
+});

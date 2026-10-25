@@ -316,6 +316,7 @@ const MealRandom = (() => {
 
   // 按 key 回到当前菜单找实体：结果卡片可能比菜单活得久（编辑、删除、重新载入）。
   function findEntity(data, key) {
+    if (typeof key !== 'string') throw new TypeError('结果缺少 key：请使用 recommend() 的返回值');
     const i = key.indexOf(':');
     const list = key.slice(0, i) === 'window' ? data.windows : data.items;
     return (list || []).find((e) => e.id === key.slice(i + 1)) || null;
@@ -344,7 +345,7 @@ const MealRandom = (() => {
 
   return {
     CFG, readPreference, weight, applyFeedback, resetPreference, undoFeedback,
-    candidates, distribution, sampleDishes, recommend, vote, undoVote,
+    candidates, distribution, draw, sampleDishes, recommend, vote, undoVote,
   };
 })();
 
