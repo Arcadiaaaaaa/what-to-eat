@@ -45,6 +45,8 @@
   let currentMode = 'combo';
   let lastPick = { food: null, drink: null };
   let rolling = false;
+  let editing = null; // { kind: 'item' | 'window', id } 表单编辑模式
+  let editingDishId = null; // 正在行内编辑的菜品
   let pendingDelete = null; // { id, btn, timer }
   let toastTimer = null;
 
@@ -133,6 +135,90 @@
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 2, items: state.items, windows: state.windows }));
   }
 
+  // ---------- 导入容错归一化（AI 输出 / 手输均可） ----------
+  function parsePriceValue(v) {
+    if (typeof v === 'number' && Number.isFinite(v)) return v >= 0 ? Math.round(v * 100) / 100 : null;
+    if (typeof v === 'string') {
+      const cleaned = v.replace(/[^\d.]/g, '');
+      if (!cleaned) return null;
+      const n = parseFloat(cleaned);
+      return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null;
+    }
+    return null;
+  }
+
+  const MEAL_ALIASES = [
+    ['breakfast', ['breakfast', '早']],
+    ['lunch', ['lunch', '午']],
+    ['dinner', ['dinner', '晚']],
+  ];
+
+  function normalizeMeals(v) {
+    const arr = Array.isArray(v) ? v : typeof v === 'string' ? [v] : [];
+    const out = new Set();
+    arr.forEach((x) => {
+      const s = String(x).trim().toLowerCase();
+      if (s === 'all' || s === '全天' || s === '每日' || s === 'daily') {
+        out.add('breakfast'); out.add('lunch'); out.add('dinner');
+        return;
+      }
+      MEAL_ALIASES.forEach(([meal, aliases]) => {
+        if (aliases.some((a) => s === a.toLowerCase() || s.includes(a))) out.add(meal);
+      });
+    });
+    return [...out];
+  }
+
+  function normalizeType(v) {
+    const s = String(v == null ? '' : v).trim().toLowerCase();
+    if (s === 'drink' || s.includes('饮') || s.includes('drink') || s.includes('饮料')) return 'drink';
+    if (s === 'food' || s.includes('餐') || s.includes('食') || s.includes('food')) return 'food';
+    return null;
+  }
+
+  const K_ALIASES = { 2: 2, 3: 3, 4: 4, '2': 2, '3': 3, '4': 4, 双拼: 2, 三拼: 3, 四拼: 4 };
+
+  function normalizeRawItem(o) {
+    if (!o || typeof o !== 'object') return null;
+    const name = typeof o.name === 'string' ? o.name.trim() : '';
+    if (!name) return null;
+    return {
+      name,
+      price: parsePriceValue(o.price),
+      type: normalizeType(o.type) || 'food',
+      meals: normalizeMeals(o.meals).length ? normalizeMeals(o.meals) : ['breakfast', 'lunch', 'dinner'],
+    };
+  }
+
+  function normalizeRawWindow(o) {
+    if (!o || typeof o !== 'object') return null;
+    const name = typeof o.name === 'string' ? o.name.trim() : '';
+    if (!name) return null;
+    const pickOptions = [...new Set((Array.isArray(o.pickOptions) ? o.pickOptions : [])
+      .map((k) => K_ALIASES[k]).filter(Boolean))];
+    const fixedPrices = {};
+    if (o.fixedPrices && typeof o.fixedPrices === 'object') {
+      Object.entries(o.fixedPrices).forEach(([k, v]) => {
+        const kk = K_ALIASES[k];
+        const price = parsePriceValue(v);
+        if (kk && price != null) fixedPrices[kk] = price;
+      });
+    }
+    const dishes = (Array.isArray(o.dishes) ? o.dishes : [])
+      .map((d) => {
+        if (!d || typeof d !== 'object' || typeof d.name !== 'string' || !d.name.trim()) return null;
+        return { name: d.name.trim(), price: parsePriceValue(d.price) };
+      })
+      .filter(Boolean);
+    return {
+      name,
+      meals: normalizeMeals(o.meals).length ? normalizeMeals(o.meals) : ['breakfast', 'lunch', 'dinner'],
+      pickOptions: pickOptions.sort((a, b) => a - b),
+      fixedPrices,
+      dishes,
+    };
+  }
+
   // ---------- 随机候选池 ----------
   const drinksForMeal = (meal) => state.items.filter((i) => i.type === 'drink' && i.meals.includes(meal));
   const validKs = (w) => w.pickOptions.filter((k) => K_LABEL[k] && k <= w.dishes.length);
@@ -187,6 +273,9 @@
   function switchMeal(meal) {
     if (!MEALS[meal]) return;
     currentMeal = meal;
+    editingDishId = null;
+    setItemEditMode(null);
+    setWindowEditMode(null);
     document.querySelectorAll('.tab[data-meal]').forEach((b) => {
       b.classList.toggle('active', b.dataset.meal === meal);
     });
@@ -235,6 +324,10 @@
       item.price == null ? 'price unknown' : 'price',
       item.price == null ? '未标价' : `¥${fmt(item.price)}`
     ));
+    const edit = el('button', 'edit', '编辑');
+    edit.type = 'button';
+    edit.dataset.id = item.id;
+    li.appendChild(edit);
     const del = el('button', 'del', '删除');
     del.type = 'button';
     del.dataset.id = item.id;
@@ -261,6 +354,10 @@
     });
     head.appendChild(el('span', 'wc-meta',
       `${w.meals.map((m) => MEALS[m].label[0]).join('/')} · ${kParts.join(' · ')} · ${w.dishes.length} 道菜`));
+    const wedit = el('button', 'edit wedit', '编辑');
+    wedit.type = 'button';
+    wedit.dataset.wid = w.id;
+    head.appendChild(wedit);
     const del = el('button', 'del wdel', '删除');
     del.type = 'button';
     del.dataset.wid = w.id;
@@ -275,6 +372,31 @@
       ul.appendChild(el('li', 'wc-empty-dish', `菜品数不足（${K_LABEL[need]}至少需要 ${need} 道菜），暂不参与随机`));
     }
     w.dishes.forEach((d) => {
+      if (d.id === editingDishId) {
+        const li = el('li', 'dish-editing');
+        const nameI = el('input');
+        nameI.className = 'dish-edit-name';
+        nameI.value = d.name;
+        nameI.maxLength = 40;
+        const priceI = el('input');
+        priceI.className = 'dish-edit-price';
+        priceI.type = 'number';
+        priceI.min = '0';
+        priceI.step = 'any';
+        priceI.value = d.price == null ? '' : d.price;
+        const save = el('button', 'btn dish-add dsave', '保存');
+        save.type = 'button';
+        save.dataset.wid = w.id;
+        save.dataset.did = d.id;
+        const cancel = el('button', 'btn ghost small dcancel', '取消');
+        cancel.type = 'button';
+        li.appendChild(nameI);
+        li.appendChild(priceI);
+        li.appendChild(save);
+        li.appendChild(cancel);
+        ul.appendChild(li);
+        return;
+      }
       const li = el('li');
       li.appendChild(el('span', 'name', d.name));
       li.appendChild(el(
@@ -282,6 +404,11 @@
         d.price == null ? 'price unknown' : 'price',
         d.price == null ? '未标价' : `¥${fmt(d.price)}`
       ));
+      const dedit = el('button', 'edit dedit', '编辑');
+      dedit.type = 'button';
+      dedit.dataset.wid = w.id;
+      dedit.dataset.did = d.id;
+      li.appendChild(dedit);
       const ddel = el('button', 'del ddel', '删除');
       ddel.type = 'button';
       ddel.dataset.wid = w.id;
@@ -473,7 +600,7 @@
     const rollBtn = $('#rollBtn');
     rollBtn.disabled = true;
 
-    // 滚动效果：名字快速轮换后落定
+    // 名字快速轮换后落定
     const startedAt = Date.now();
     const timer = setInterval(() => {
       if (Date.now() - startedAt >= 700) {
@@ -499,11 +626,35 @@
     }, 70);
   }
 
-  // ---------- 录入：普通条目 ----------
+  // ---------- 录入 / 编辑：普通条目 ----------
   function showFormError(msg) {
     const e = $('#formError');
     e.textContent = msg;
     e.hidden = false;
+  }
+
+  function setItemEditMode(item) {
+    editing = item ? { kind: 'item', id: item.id } : null;
+    const form = $('#addItemForm');
+    if (item) {
+      $('#itemFormTitle').textContent = `✏️ 编辑：${item.name}`;
+      $('#itemName').value = item.name;
+      $('#itemPrice').value = item.price == null ? '' : item.price;
+      form.querySelector(`input[name="itemType"][value="${item.type}"]`).checked = true;
+      form.querySelectorAll('input[name="meal"]').forEach((c) => { c.checked = item.meals.includes(c.value); });
+      $('#itemSubmitBtn').textContent = '保存修改';
+      $('#itemEditCancel').hidden = false;
+      $('#itemName').focus();
+    } else {
+      $('#itemFormTitle').textContent = '录入餐品 / 饮品';
+      $('#itemName').value = '';
+      $('#itemPrice').value = '';
+      form.querySelector('input[name="itemType"][value="food"]').checked = true;
+      form.querySelectorAll('input[name="meal"]').forEach((c) => { c.checked = c.value === currentMeal; });
+      $('#itemSubmitBtn').textContent = '＋ 添加到清单';
+      $('#itemEditCancel').hidden = true;
+    }
+    $('#formError').hidden = true;
   }
 
   function submitItem(form) {
@@ -522,6 +673,21 @@
     }
     $('#formError').hidden = true;
 
+    if (editing && editing.kind === 'item') {
+      const target = state.items.find((i) => i.id === editing.id);
+      if (target) {
+        target.name = name.slice(0, 40);
+        target.price = price;
+        target.type = type;
+        target.meals = meals;
+      }
+      save();
+      setItemEditMode(null);
+      renderAll();
+      toast(`已更新「${name}」`);
+      return;
+    }
+
     state.items.push({ id: uid(), name: name.slice(0, 40), price, type, meals, createdAt: Date.now() });
     save();
     $('#itemName').value = '';
@@ -533,7 +699,7 @@
       : `已添加「${name}」· ${meals.map((m) => MEALS[m].label).join('、')}`);
   }
 
-  // ---------- 录入：拼菜窗口 ----------
+  // ---------- 录入 / 编辑：拼菜窗口 ----------
   function syncFixedPriceRows(form) {
     form.querySelectorAll('.fixed-price-row').forEach((row) => {
       const k = row.dataset.k;
@@ -542,7 +708,38 @@
     });
   }
 
-  function submitWindow(form) {
+  function setWindowEditMode(win) {
+    editing = win ? { kind: 'window', id: win.id } : null;
+    const form = $('#addWindowForm');
+    if (win) {
+      $('#windowFormTitle').textContent = `✏️ 编辑窗口：${win.name}`;
+      $('#windowName').value = win.name;
+      form.querySelectorAll('input[name="wmeal"]').forEach((c) => { c.checked = win.meals.includes(c.value); });
+      form.querySelectorAll('input[name="pickK"]').forEach((c) => {
+        c.checked = win.pickOptions.includes(Number(c.value));
+      });
+      form.querySelectorAll('.fixed-price-row input').forEach((i) => { i.value = ''; });
+      Object.entries(win.fixedPrices || {}).forEach(([k, v]) => {
+        const input = form.querySelector(`.fixed-price-row[data-k="${k}"] input`);
+        if (input) input.value = v;
+      });
+      $('#windowSubmitBtn').textContent = '保存修改';
+      $('#windowEditCancel').hidden = false;
+      $('#windowName').focus();
+    } else {
+      $('#windowFormTitle').textContent = '录入拼菜窗口';
+      $('#windowName').value = '';
+      form.querySelectorAll('input[name="wmeal"]').forEach((c) => { c.checked = c.value === currentMeal; });
+      form.querySelectorAll('input[name="pickK"]').forEach((c) => { c.checked = false; });
+      form.querySelectorAll('.fixed-price-row input').forEach((i) => { i.value = ''; });
+      $('#windowSubmitBtn').textContent = '＋ 创建窗口';
+      $('#windowEditCancel').hidden = true;
+    }
+    syncFixedPriceRows(form);
+    $('#windowFormError').hidden = true;
+  }
+
+  function readWindowForm(form) {
     const name = $('#windowName').value.trim();
     const meals = [...form.querySelectorAll('input[name="wmeal"]:checked')].map((c) => c.value);
     const ks = [...form.querySelectorAll('input[name="pickK"]:checked')]
@@ -563,19 +760,37 @@
       fixedPrices[k] = v;
     }
     errEl.hidden = true;
+    return { name: name.slice(0, 40), meals, pickOptions: ks, fixedPrices };
+  }
+
+  function submitWindow(form) {
+    const parsed = readWindowForm(form);
+    if (!parsed) return;
+
+    if (editing && editing.kind === 'window') {
+      const target = state.windows.find((w) => w.id === editing.id);
+      if (target) {
+        target.name = parsed.name;
+        target.meals = parsed.meals;
+        target.pickOptions = parsed.pickOptions;
+        target.fixedPrices = parsed.fixedPrices;
+      }
+      save();
+      setWindowEditMode(null);
+      renderAll();
+      toast(`已更新窗口「${parsed.name}」`);
+      return;
+    }
 
     state.windows.push({
-      id: uid(), name: name.slice(0, 40), meals,
-      pickOptions: ks, fixedPrices, dishes: [], createdAt: Date.now(),
+      id: uid(), name: parsed.name, meals: parsed.meals,
+      pickOptions: parsed.pickOptions, fixedPrices: parsed.fixedPrices,
+      dishes: [], createdAt: Date.now(),
     });
     save();
-    $('#windowName').value = '';
-    form.querySelectorAll('input[name="pickK"]').forEach((c) => { c.checked = false; });
-    form.querySelectorAll('.fixed-price-row input').forEach((i) => { i.value = ''; });
-    syncFixedPriceRows(form);
-    form.querySelectorAll('input[name="wmeal"]').forEach((c) => { c.checked = c.value === currentMeal; });
+    setWindowEditMode(null);
     renderAll();
-    toast(`已创建窗口「${name}」，接下来添加菜品`);
+    toast(`已创建窗口「${parsed.name}」，接下来添加菜品`);
   }
 
   function submitDish(form) {
@@ -681,51 +896,92 @@
     URL.revokeObjectURL(a.href);
   }
 
+  // 解析一段文本为数据并合并导入；容忍代码围栏、中文餐段/拼法、带单位的价格等写法
+  function importFromText(text) {
+    let data;
+    try {
+      let t = String(text).trim();
+      const fence = t.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+      if (fence) t = fence[1].trim();
+      try {
+        data = JSON.parse(t);
+      } catch (err) {
+        const starts = [t.indexOf('{'), t.indexOf('[')].filter((i) => i >= 0);
+        const end = Math.max(t.lastIndexOf('}'), t.lastIndexOf(']'));
+        if (!starts.length || end < 0) throw err;
+        const start = Math.min(...starts);
+        if (start >= end) throw err;
+        data = JSON.parse(t.slice(start, end + 1));
+      }
+    } catch (err) {
+      toast('导入失败：不是有效的 JSON');
+      return false;
+    }
+
+    const inItems = Array.isArray(data) ? data : data.items;
+    const inWindows = !Array.isArray(data) && Array.isArray(data.windows) ? data.windows : [];
+    const validItems = (Array.isArray(inItems) ? inItems : [])
+      .map(normalizeRawItem).filter(Boolean).filter(isValidItem).map(sanitizeItem);
+    const validWindows = inWindows
+      .map(normalizeRawWindow).filter(Boolean).filter(isValidWindow).map(sanitizeWindow);
+    if (!validItems.length && !validWindows.length) {
+      toast('内容里没有可用的数据');
+      return;
+    }
+
+    const itemKeys = new Set(state.items.map(itemKey));
+    let addedItems = 0;
+    validItems.forEach((item) => {
+      const key = itemKey(item);
+      if (itemKeys.has(key)) return;
+      itemKeys.add(key);
+      state.items.push(item);
+      addedItems += 1;
+    });
+    const winKeys = new Set(state.windows.map(windowKey));
+    let addedWindows = 0;
+    validWindows.forEach((w) => {
+      const key = windowKey(w);
+      if (winKeys.has(key)) return;
+      winKeys.add(key);
+      state.windows.push(w);
+      addedWindows += 1;
+    });
+    save();
+    renderAll();
+
+    const parts = [];
+    if (addedItems) parts.push(`条目 ${addedItems}`);
+    if (addedWindows) parts.push(`窗口 ${addedWindows}`);
+    const skipped = (validItems.length + validWindows.length) - (addedItems + addedWindows);
+    if (!parts.length) { toast('导入的数据都已存在'); return false; }
+    toast(`已导入 ${parts.join('、')}${skipped ? `，跳过重复 ${skipped} 条` : ''}`);
+    return true;
+  }
+
   function importFile(file) {
     const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const data = JSON.parse(reader.result);
-        const inItems = Array.isArray(data) ? data : data.items;
-        const inWindows = !Array.isArray(data) && Array.isArray(data.windows) ? data.windows : [];
-        const validItems = Array.isArray(inItems) ? inItems.filter(isValidItem).map(sanitizeItem) : [];
-        const validWindows = inWindows.filter(isValidWindow).map(sanitizeWindow);
-        if (!validItems.length && !validWindows.length) {
-          toast('文件里没有可用的数据');
-          return;
-        }
-        const itemKeys = new Set(state.items.map(itemKey));
-        let addedItems = 0;
-        validItems.forEach((item) => {
-          const key = itemKey(item);
-          if (itemKeys.has(key)) return;
-          itemKeys.add(key);
-          state.items.push(item);
-          addedItems += 1;
-        });
-        const winKeys = new Set(state.windows.map(windowKey));
-        let addedWindows = 0;
-        validWindows.forEach((w) => {
-          const key = windowKey(w);
-          if (winKeys.has(key)) return;
-          winKeys.add(key);
-          state.windows.push(w);
-          addedWindows += 1;
-        });
-        save();
-        renderAll();
-        const parts = [];
-        if (addedItems) parts.push(`条目 ${addedItems}`);
-        if (addedWindows) parts.push(`窗口 ${addedWindows}`);
-        const skipped = (validItems.length + validWindows.length) - (addedItems + addedWindows);
-        if (!parts.length) { toast('导入的数据都已存在'); return; }
-        toast(`已导入 ${parts.join('、')}${skipped ? `，跳过重复 ${skipped} 条` : ''}`);
-      } catch (err) {
-        toast('导入失败：不是有效的数据文件');
-      }
-    };
+    reader.onload = () => { importFromText(reader.result); };
     reader.onerror = () => toast('导入失败：文件读取错误');
     reader.readAsText(file);
+  }
+
+  async function copyText(t) {
+    try {
+      await navigator.clipboard.writeText(t);
+      return true;
+    } catch (err) {
+      const ta = document.createElement('textarea');
+      ta.value = t;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      ta.remove();
+      return ok;
+    }
   }
 
   // ---------- 事件绑定 ----------
@@ -744,11 +1000,24 @@
       e.preventDefault();
       submitItem(e.target);
     });
+    $('#itemEditCancel').addEventListener('click', () => setItemEditMode(null));
     $('#itemList').addEventListener('click', (e) => {
-      const btn = e.target.closest('.del');
-      if (!btn) return;
-      const id = btn.dataset.id;
-      requestDelete(id, btn, () => { state.items = state.items.filter((i) => i.id !== id); });
+      const editBtn = e.target.closest('.edit');
+      if (editBtn) {
+        const item = state.items.find((i) => i.id === editBtn.dataset.id);
+        if (item) {
+          setItemEditMode(item);
+          $('#addItemForm').scrollIntoView({ block: 'nearest' });
+        }
+        return;
+      }
+      const delBtn = e.target.closest('.del');
+      if (!delBtn) return;
+      const id = delBtn.dataset.id;
+      requestDelete(id, delBtn, () => {
+        state.items = state.items.filter((i) => i.id !== id);
+        if (editing && editing.kind === 'item' && editing.id === id) setItemEditMode(null);
+      });
     });
 
     $('#addWindowForm').addEventListener('change', (e) => {
@@ -758,16 +1027,67 @@
       e.preventDefault();
       submitWindow(e.target);
     });
+    $('#windowEditCancel').addEventListener('click', () => setWindowEditMode(null));
+
     $('#windowList').addEventListener('click', (e) => {
-      const btn = e.target.closest('.del');
-      if (!btn) return;
-      if (btn.classList.contains('wdel')) {
-        const wid = btn.dataset.wid;
-        requestDelete(wid, btn, () => { state.windows = state.windows.filter((w) => w.id !== wid); });
-      } else if (btn.classList.contains('ddel')) {
-        const { wid, did } = btn.dataset;
+      const weditBtn = e.target.closest('.wedit');
+      if (weditBtn) {
+        const win = state.windows.find((w) => w.id === weditBtn.dataset.wid);
+        if (win) {
+          setWindowEditMode(win);
+          $('#addWindowForm').scrollIntoView({ block: 'nearest' });
+        }
+        return;
+      }
+      const deditBtn = e.target.closest('.dedit');
+      if (deditBtn) {
+        editingDishId = deditBtn.dataset.did;
+        renderWindowList();
+        return;
+      }
+      const dsaveBtn = e.target.closest('.dsave');
+      if (dsaveBtn) {
+        const li = dsaveBtn.closest('li');
+        const name = li.querySelector('.dish-edit-name').value.trim();
+        const priceRaw = li.querySelector('.dish-edit-price').value.trim();
+        if (!name) { toast('请填写菜名'); return; }
+        let price = null;
+        if (priceRaw !== '') {
+          price = Math.round(parseFloat(priceRaw) * 100) / 100;
+          if (!Number.isFinite(price) || price < 0) { toast('价格需为不小于 0 的数字'); return; }
+        }
+        const win = state.windows.find((w) => w.id === dsaveBtn.dataset.wid);
+        const dish = win && win.dishes.find((d) => d.id === dsaveBtn.dataset.did);
+        if (!dish) { editingDishId = null; renderAll(); return; }
+        dish.name = name.slice(0, 40);
+        dish.price = price;
+        editingDishId = null;
+        save();
+        renderAll();
+        toast(`已更新「${name}」`);
+        return;
+      }
+      const dcancelBtn = e.target.closest('.dcancel');
+      if (dcancelBtn) {
+        editingDishId = null;
+        renderWindowList();
+        return;
+      }
+      const delBtn = e.target.closest('.del');
+      if (!delBtn) return;
+      if (delBtn.classList.contains('wdel')) {
+        const wid = delBtn.dataset.wid;
+        requestDelete(wid, delBtn, () => {
+          const win = state.windows.find((w) => w.id === wid);
+          if (win && win.dishes.some((d) => d.id === editingDishId)) editingDishId = null;
+          state.windows = state.windows.filter((w) => w.id !== wid);
+          if (editing && editing.kind === 'window' && editing.id === wid) setWindowEditMode(null);
+        });
+      } else if (delBtn.classList.contains('ddel')) {
+        const { wid, did } = delBtn.dataset;
         const win = state.windows.find((w) => w.id === wid);
-        requestDelete(`${wid}:${did}`, btn, () => {
+        requestDelete(`${wid}:${did}`, delBtn, () => {
+          if (editingDishId === did) editingDishId = null;
           if (win) win.dishes = win.dishes.filter((d) => d.id !== did);
         });
       }
@@ -786,6 +1106,27 @@
       const file = e.target.files && e.target.files[0];
       if (file) importFile(file);
       e.target.value = '';
+    });
+
+    $('#copyPromptBtn').addEventListener('click', async () => {
+      const ok = await copyText($('#aiPrompt').textContent);
+      if (ok) {
+        toast('提示词已复制，发给 AI 时连同菜单照片一起粘贴');
+        return;
+      }
+      // 剪贴板不可用（如 file:// 或部分 webview）：全选文本，用户按一次复制键即可
+      const range = document.createRange();
+      range.selectNodeContents($('#aiPrompt'));
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      toast('已全选提示词，按 Ctrl/Cmd + C 复制');
+    });
+    $('#importPasteBtn').addEventListener('click', () => {
+      const ta = $('#pasteJson');
+      if (!ta.value.trim()) { toast('请先粘贴 JSON 内容'); return; }
+      const ok = importFromText(ta.value);
+      if (ok !== false) ta.value = '';
     });
 
     window.addEventListener('hashchange', applyView);

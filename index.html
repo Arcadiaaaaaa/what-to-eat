@@ -54,7 +54,7 @@
 
       <div class="settings-layout">
         <section class="panel form-panel">
-          <h2>录入餐品 / 饮品</h2>
+          <h2 id="itemFormTitle">录入餐品 / 饮品</h2>
           <p class="panel-hint">单独的餐品或饮品，如牛肉面、豆浆</p>
           <form id="addItemForm" novalidate>
             <label class="field">
@@ -80,7 +80,10 @@
                 <label class="choice"><input type="checkbox" name="meal" value="dinner"><span class="chip meal-chip">晚餐</span></label>
               </div>
             </fieldset>
-            <button type="submit" class="btn primary">＋ 添加到清单</button>
+            <div class="form-actions">
+              <button type="submit" class="btn primary" id="itemSubmitBtn">＋ 添加到清单</button>
+              <button type="button" class="btn ghost" id="itemEditCancel" hidden>取消</button>
+            </div>
             <p class="error" id="formError" hidden></p>
           </form>
         </section>
@@ -95,7 +98,7 @@
         </section>
 
         <section class="panel window-form-panel">
-          <h2>录入拼菜窗口</h2>
+          <h2 id="windowFormTitle">录入拼菜窗口</h2>
           <p class="panel-hint">自选窗口录成一个「窗口」，随机时从里面拼出双拼 / 三拼</p>
           <form id="addWindowForm" novalidate>
             <label class="field">
@@ -126,7 +129,10 @@
                 <div class="fixed-price-row" data-k="4" hidden><span>四拼 ¥</span><input type="number" min="0" step="any" inputmode="decimal" placeholder="如 18"></div>
               </div>
             </div>
-            <button type="submit" class="btn primary">＋ 创建窗口</button>
+            <div class="form-actions">
+              <button type="submit" class="btn primary" id="windowSubmitBtn">＋ 创建窗口</button>
+              <button type="button" class="btn ghost" id="windowEditCancel" hidden>取消</button>
+            </div>
             <p class="error" id="windowFormError" hidden></p>
           </form>
         </section>
@@ -138,17 +144,51 @@
             <p>这个餐段还没有拼菜窗口</p>
           </div>
         </section>
+
+        <section class="panel ai-import-panel">
+          <h2>AI 批量导入</h2>
+          <p class="panel-hint">把菜单拍照发给任意 AI，附上下方提示词，再将 AI 输出的 JSON 粘贴到下面即可批量导入</p>
+          <div class="ai-prompt">
+            <div class="ai-prompt-head">
+              <span class="field-label">菜单转 JSON 提示词</span>
+              <button type="button" class="btn ghost small" id="copyPromptBtn">复制提示词</button>
+            </div>
+            <pre class="prompt-box" id="aiPrompt">你是菜单数字化助手。请把用户提供的菜单照片或文字，整理成 JSON，要求：
+
+1. 只输出 JSON（可用 ```json 代码块包裹），不要输出任何解释或多余文字。
+2. 顶层结构：{"items": [...], "windows": [...]}，某一类没有就给空数组。
+3. items 是单点的餐品 / 饮品，每个对象包含：
+   - name：名称（必填）
+   - price：单价，数字，单位元；菜单没写就给 null
+   - type："food"（餐品）或 "drink"（饮品，粥、汤、豆浆等也按 drink）
+   - meals：适用餐段数组，取值 "breakfast" / "lunch" / "dinner"，对应早餐 / 午餐 / 晚餐；菜单没说明就按常理判断
+4. windows 是可以自选组合、双拼 / 三拼的窗口（自选快餐、称重菜、麻辣烫自选等），每个对象包含：
+   - name：窗口名称
+   - meals：同上
+   - pickOptions：支持的拼法，如 [2, 3] 表示双拼、三拼
+   - fixedPrices：可选，按拼数的一口价，如 {"2": 12, "3": 15}；菜单没写就省略
+   - dishes：窗口内的菜品数组，每道菜 {"name": ..., "price": ...}，价格没写给 null
+5. 不确定就不要编造，宁可省略；合并明显重复的条目。</pre>
+          </div>
+          <label class="field">
+            <span class="field-label">粘贴 JSON（可直接粘贴 AI 的整个回复，会自动剥离代码围栏）</span>
+            <textarea id="pasteJson" rows="6" placeholder='{"items": [...], "windows": [...]}' spellcheck="false"></textarea>
+          </label>
+          <div class="form-actions">
+            <button type="button" class="btn primary" id="importPasteBtn">导入粘贴的 JSON</button>
+          </div>
+        </section>
       </div>
 
       <div class="data-actions">
         <button type="button" class="btn ghost small" id="exportBtn">导出数据</button>
-        <button type="button" class="btn ghost small" id="importBtn">导入数据</button>
+        <button type="button" class="btn ghost small" id="importBtn">从文件导入</button>
         <input type="file" id="importFile" accept="application/json,.json" hidden>
       </div>
     </section>
 
     <footer>
-      <p>数据保存在当前浏览器本地（localStorage），不会上传 · v0.2</p>
+      <p>数据保存在当前浏览器本地（localStorage），不会上传 · v0.3</p>
     </footer>
   </div>
 

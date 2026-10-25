@@ -35,9 +35,9 @@ h1 { margin: 0; font-size: 28px; font-weight: 800; letter-spacing: 1px; }
 .view-link {
   text-decoration: none; padding: 8px 16px; border-radius: 999px;
   border: 1px solid var(--line); background: var(--card); color: var(--ink-soft);
-  font-size: 14px; transition: all 0.18s ease;
+  font-size: 14px; transition: color 0.18s ease, background 0.18s ease, border-color 0.18s ease;
 }
-.view-link:hover { color: var(--ink); transform: translateY(-1px); }
+.view-link:hover { color: var(--ink); }
 .view-link.active { background: var(--ink); border-color: var(--ink); color: #fff; }
 
 /* ---------- 餐段切换 ---------- */
@@ -45,9 +45,9 @@ h1 { margin: 0; font-size: 28px; font-weight: 800; letter-spacing: 1px; }
 .tab {
   border: 1px solid var(--line); background: var(--card); color: var(--ink-soft);
   padding: 10px 26px; border-radius: 999px; font-size: 16px; cursor: pointer;
-  font-family: inherit; transition: all 0.18s ease;
+  font-family: inherit; transition: color 0.18s ease;
 }
-.tab:hover { transform: translateY(-1px); color: var(--ink); }
+.tab:hover { color: var(--ink); }
 .tab.active { background: var(--ink); border-color: var(--ink); color: #fff; box-shadow: var(--shadow); }
 
 /* ---------- 推荐视图 ---------- */
@@ -69,9 +69,8 @@ h1 { margin: 0; font-size: 28px; font-weight: 800; letter-spacing: 1px; }
 .result .btn.ghost { display: block; margin: 0 auto; }
 .result-card {
   border: 1.5px dashed #f1c8a0; background: #fffaf3; border-radius: 12px;
-  padding: 16px; animation: pop 0.25s ease;
+  padding: 16px;
 }
-@keyframes pop { from { transform: scale(0.97); opacity: 0.5; } to { transform: scale(1); opacity: 1; } }
 .result-meal { font-size: 13px; color: var(--ink-soft); margin-bottom: 8px; }
 .result-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; font-size: 19px; flex-wrap: wrap; }
 .result-item .name { font-weight: 700; overflow-wrap: anywhere; }
@@ -138,6 +137,9 @@ input[type="text"]:focus, input[type="number"]:focus {
 
 .error { color: var(--danger); font-size: 13px; margin: 0; }
 
+.form-actions { display: flex; gap: 10px; }
+.form-actions .btn.primary { flex: 1; width: auto; }
+
 /* ---------- 按钮 ---------- */
 .btn { border: none; cursor: pointer; font-family: inherit; border-radius: 10px; transition: all 0.15s; }
 .btn.primary { background: var(--primary); color: #fff; padding: 11px; font-size: 15px; width: 100%; }
@@ -150,7 +152,7 @@ input[type="text"]:focus, input[type="number"]:focus {
   background: linear-gradient(135deg, #f76707, #e8590c); border-radius: 12px;
   box-shadow: 0 6px 16px rgba(232, 89, 12, 0.3); margin: 14px 0;
 }
-.btn.roll:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 8px 20px rgba(232, 89, 12, 0.35); }
+.btn.roll:hover:not(:disabled) { background: linear-gradient(135deg, #f76707, #d9480f); }
 .btn.roll:disabled { opacity: 0.6; cursor: wait; }
 .btn.dish-add { padding: 7px 14px; font-size: 13px; background: var(--primary); color: #fff; border-radius: 8px; flex: none; }
 .btn.dish-add:hover { background: var(--primary-deep); }
@@ -177,6 +179,12 @@ input[type="text"]:focus, input[type="number"]:focus {
 }
 .del:hover { color: var(--danger); background: #fff0f0; }
 .del.confirm { color: #fff; background: var(--danger); }
+.edit {
+  border: none; background: transparent; color: #b08968; cursor: pointer;
+  font-size: 13px; padding: 4px 8px; border-radius: 8px; flex: none;
+  font-family: inherit; transition: all 0.15s;
+}
+.edit:hover { color: var(--primary); background: #fff4e6; }
 
 .empty {
   text-align: center; padding: 26px 10px; color: var(--ink-soft); font-size: 14px;
@@ -189,7 +197,7 @@ input[type="text"]:focus, input[type="number"]:focus {
 .wc-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .wc-name { font-weight: 700; }
 .wc-meta { font-size: 12px; color: #b08968; background: #faf0e0; border-radius: 6px; padding: 2px 8px; }
-.wc-head .del { margin-left: auto; }
+.wc-head .edit { margin-left: auto; }
 .wc-dishes { list-style: none; margin: 10px 0 0; padding: 0; }
 .wc-dishes li { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--line); font-size: 14px; }
 .wc-dishes li:last-child { border-bottom: none; }
@@ -203,6 +211,31 @@ input[type="text"]:focus, input[type="number"]:focus {
   border-radius: 8px; font-size: 13.5px; font-family: inherit; background: #fff;
 }
 .wc-add-dish input[type="number"] { flex: 0 0 100px; }
+li.dish-editing input {
+  padding: 7px 10px; border: 1px solid #ffc078; border-radius: 8px;
+  font-size: 13.5px; font-family: inherit; background: #fff; outline: 2px solid #ffd8a8;
+}
+li.dish-editing input:first-child { flex: 1; min-width: 0; }
+li.dish-editing input[type="number"] { flex: 0 0 88px; }
+
+/* ---------- AI 批量导入 ---------- */
+.ai-import-panel { grid-column: 1 / -1; display: grid; gap: 12px; }
+.ai-import-panel h2 { margin: 0; }
+.ai-import-panel .panel-hint { margin: 0; }
+.ai-prompt-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.prompt-box {
+  background: #fffdf9; border: 1px dashed var(--line); border-radius: 12px;
+  padding: 14px; margin: 0; font-size: 12.5px; line-height: 1.7;
+  white-space: pre-wrap; word-break: break-word; overflow: auto; max-height: 300px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--ink);
+}
+textarea#pasteJson {
+  width: 100%; min-height: 120px; padding: 10px 12px; border: 1px solid var(--line);
+  border-radius: 10px; font-size: 13px; line-height: 1.6; resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: #fffdf9; color: var(--ink);
+}
+textarea#pasteJson:focus { outline: 2px solid #ffd8a8; border-color: #ffc078; }
 
 /* ---------- 页脚 / 提示 ---------- */
 footer { margin-top: 26px; text-align: center; color: var(--ink-soft); font-size: 12.5px; }
@@ -212,6 +245,6 @@ footer { margin-top: 26px; text-align: center; color: var(--ink-soft); font-size
   position: fixed; left: 50%; bottom: 34px; transform: translateX(-50%);
   background: rgba(61, 50, 41, 0.92); color: #fff; padding: 10px 20px;
   border-radius: 999px; font-size: 14px; z-index: 50;
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15); animation: pop 0.2s ease;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15);
   max-width: 86vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
