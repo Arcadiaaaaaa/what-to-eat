@@ -1613,4 +1613,11 @@
   switchMeal('breakfast');
   if (state.history.length) renderResultCard(state.history[0], false);
   else setResultPlaceholder();
+
+  // PWA：安全上下文（https / localhost）注册 Service Worker，离线可用
+  if ('serviceWorker' in navigator && window.isSecureContext) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./sw.js').catch(() => {});
+    });
+  }
 })();

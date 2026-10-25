@@ -39,19 +39,7 @@ python3 -m http.server 8080
 
 ## 部署
 
-纯静态文件，把整个目录上传到作品集服务器即可。nginx 示例：
-
-```nginx
-server {
-    # ... 已有配置 ...
-    location /what-to-eat/ {
-        alias /var/www/what-to-eat/;
-        index index.html;
-    }
-}
-```
-
-也可以直接放 GitHub Pages / Vercel / Netlify 等任意静态托管。
+纯静态文件，任意静态托管可直接上线（已内置 PWA，支持加到主屏与离线打开）。推荐主线路为腾讯云 EdgeOne Pages（国内直连快），另备 Cloudflare Pages / 自有服务器方案，完整步骤见 [DEPLOY.md](DEPLOY.md)。
 
 ## 数据说明
 
