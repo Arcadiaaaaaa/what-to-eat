@@ -1,3 +1,6 @@
 .DS_Store
 *.log
 .zcode/
+.claude/
+.wrangler/
+.worktrees/
