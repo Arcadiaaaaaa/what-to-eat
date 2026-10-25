@@ -43,7 +43,8 @@
   const state = { items: [], windows: [] };
   let currentMeal = 'breakfast';
   let currentMode = 'combo';
-  let lastPick = { food: null, drink: null };
+  let last = {}; // 会话内上轮指针，键 "meal:slot"（软防连抽用，不持久化）
+  let currentResult = null; // 当前展示结果（会话内，用于反馈与撤销）
   let rolling = false;
   let editing = null; // { kind: 'item' | 'window', id } 表单编辑模式
   let editingDishId = null; // 正在行内编辑的菜品
@@ -81,6 +82,7 @@
       type: o.type,
       meals: [...new Set(o.meals)],
       createdAt: typeof o.createdAt === 'number' ? o.createdAt : Date.now(),
+      preference: MealRandom.readPreference(o),
     };
   }
 
@@ -116,6 +118,7 @@
       fixedPrices,
       dishes: o.dishes.filter(dishIsValid).map(sanitizeDish),
       createdAt: typeof o.createdAt === 'number' ? o.createdAt : Date.now(),
+      preference: MealRandom.readPreference(o),
     };
   }
 
@@ -219,24 +222,33 @@
     };
   }
 
-  // ---------- 随机候选池 ----------
-  const drinksForMeal = (meal) => state.items.filter((i) => i.type === 'drink' && i.meals.includes(meal));
+  // ---------- 随机候选池（模块负责：忌口剔除、每窗口一个候选名额） ----------
   const validKs = (w) => w.pickOptions.filter((k) => K_LABEL[k] && k <= w.dishes.length);
 
   function foodCandidates(meal) {
-    const singles = state.items.filter((i) => i.type === 'food' && i.meals.includes(meal));
-    const windows = state.windows.filter((w) => w.meals.includes(meal) && validKs(w).length > 0);
-    return { singles, windows };
+    const pool = MealRandom.candidates(state, meal, 'food');
+    return {
+      singles: pool.filter((c) => c.kind === 'item').map((c) => c.entity),
+      windows: pool.filter((c) => c.kind === 'window').map((c) => c.entity),
+    };
   }
 
-  function sampleDishes(dishes, k) {
-    const arr = dishes.slice();
-    for (let i = arr.length - 1; i > 0; i -= 1) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [arr[i], arr[j]] = [arr[j], arr[i]];
+  const drinksForMeal = (meal) => MealRandom.candidates(state, meal, 'drink').map((c) => c.entity);
+
+  // 累计概率抽样（模块未导出内部 draw，此处等价实现）
+  const drawRow = (rows) => {
+    const u = Math.random();
+    let cum = 0;
+    for (const r of rows) {
+      cum += r.probability;
+      if (u < cum) return r;
     }
-    return arr.slice(0, k);
-  }
+    return rows[rows.length - 1];
+  };
+
+  const blockedCountFor = (meal) =>
+    state.items.filter((i) => i.meals.includes(meal) && MealRandom.readPreference(i).blocked).length
+    + state.windows.filter((w) => w.meals.includes(meal) && MealRandom.readPreference(w).blocked).length;
 
   // 一口价优先；否则按菜价合计（任一菜未标价则视为未知）
   function windowPrice(w, k, dishes) {
@@ -295,6 +307,7 @@
     renderItemList();
     renderWindowList();
     renderPoolSummary();
+    renderPrefPanel();
     refreshResultIfEmpty();
   }
 
@@ -319,6 +332,8 @@
     const li = el('li');
     li.appendChild(el('span', 'name', item.name));
     li.appendChild(el('span', 'meal-chips', item.meals.map((m) => MEALS[m].label[0]).join('/')));
+    const flag = entityFlag(item);
+    if (flag) li.appendChild(flag);
     li.appendChild(el(
       'span',
       item.price == null ? 'price unknown' : 'price',
@@ -354,6 +369,8 @@
     });
     head.appendChild(el('span', 'wc-meta',
       `${w.meals.map((m) => MEALS[m].label[0]).join('/')} · ${kParts.join(' · ')} · ${w.dishes.length} 道菜`));
+    const wflag = entityFlag(w);
+    if (wflag) head.appendChild(wflag);
     const wedit = el('button', 'edit wedit', '编辑');
     wedit.type = 'button';
     wedit.dataset.wid = w.id;
@@ -455,6 +472,8 @@
     if (drinks.length) parts.push(`饮品 ${drinks.length}`);
     const pf = readPriceFilter();
     if (pf && !pf.invalid) parts.push(`区间 ${boundsLabel(pf)}`);
+    const blocked = blockedCountFor(currentMeal);
+    if (blocked) parts.push(`忌口 ${blocked}`);
     p.textContent = `本餐段可随机：${parts.join(' · ')}`;
   }
 
@@ -465,7 +484,11 @@
     const { singles, windows } = foodCandidates(currentMeal);
     const drinks = drinksForMeal(currentMeal);
     if (!singles.length && !windows.length && !drinks.length) {
-      result.appendChild(el('p', 'placeholder', '这个餐段还没有可随机的条目'));
+      const blocked = blockedCountFor(currentMeal);
+      const msg = blocked
+        ? `可随机条目都被忌口了（${blocked} 个），去设置-偏好与忌口恢复`
+        : '这个餐段还没有可随机的条目';
+      result.appendChild(el('p', 'placeholder', msg));
       const btn = el('button', 'btn ghost', '去设置录入 →');
       btn.type = 'button';
       btn.addEventListener('click', () => { location.hash = '#/settings'; });
@@ -530,158 +553,132 @@
     }
     const pf = pfRaw;
     const pfLabel = pf ? ` ${boundsLabel(pf)}` : '';
+    const slotsWanted = currentMode === 'combo' ? ['food', 'drink'] : [currentMode];
 
-    const { singles: allSingles, windows: allWindows } = foodCandidates(currentMeal);
-    const allDrinks = drinksForMeal(currentMeal);
-
-    // 区间开启时先粗过滤（未标价不参与；窗口按可能价格范围与区间是否有交集判断）
-    // 组合约束：未来加权抽样在此之后进行——先过滤，再抽样
-    let singles = allSingles;
-    let windows = allWindows;
-    let drinks = allDrinks;
-    if (pf) {
-      singles = allSingles.filter((i) => i.price != null
-        && i.price <= pf.hi && (currentMode === 'food' ? i.price >= pf.lo : true));
-      drinks = allDrinks.filter((d) => d.price != null
-        && d.price <= pf.hi && (currentMode === 'drink' ? d.price >= pf.lo : true));
-      windows = allWindows.filter((w) => validKs(w).some((k) => {
-        const r = windowPriceRange(w, k);
-        if (!r) return false;
-        // 组合模式下限交给合计判定，预过滤只看能否不超过上限
-        return r[0] <= pf.hi && (currentMode === 'combo' ? true : r[1] >= pf.lo);
-      }));
-    }
-
-    const wantFood = currentMode !== 'drink';
-    const wantDrink = currentMode !== 'food';
-
-    const drawFood = (useExclusion) => {
-      const pool = [
-        ...singles.map((it) => ({ kind: 'single', id: it.id, item: it })),
-        ...windows.map((w) => ({ kind: 'window', id: w.id, win: w })),
-      ];
-      const cands = (useExclusion && pool.length > 1 && lastPick.food)
-        ? pool.filter((p) => p.id !== lastPick.food)
-        : pool;
-      if (!cands.length) {
-        return {
-          fail: pf
-            ? `价格区间${pfLabel} 内没有可选的餐品 / 窗口`
-            : (currentMode === 'food' ? '该餐段还没有可随机的餐品 / 窗口' : '该餐段暂无餐品 / 窗口'),
-        };
+    // 每槽位：候选池（忌口已在模块内剔除）→ 价格粗过滤 → 分布
+    // （偏好权重含时间衰减 + 软防连抽 ×0.5 + 10% 均匀探索，先过滤后加权）
+    const dists = {};
+    const emptyNotes = {};
+    for (const slot of slotsWanted) {
+      let pool = MealRandom.candidates(state, currentMeal, slot);
+      if (pf) {
+        pool = pool.filter((c) => {
+          if (c.kind === 'window') {
+            return validKs(c.entity).some((k) => {
+              const r = windowPriceRange(c.entity, k);
+              if (!r) return false;
+              // 组合模式下限交给合计判定，预过滤只看能否不超过上限
+              return r[0] <= pf.hi && (currentMode === 'combo' ? true : r[1] >= pf.lo);
+            });
+          }
+          const p = c.entity.price;
+          if (p == null) return false;
+          if (p > pf.hi) return false;
+          return currentMode === 'combo' ? true : p >= pf.lo;
+        });
       }
-      const chosen = cands[Math.floor(Math.random() * cands.length)];
-      if (chosen.kind === 'single') {
-        return {
-          entityId: chosen.id,
-          slot: {
-            tag: TYPE_LABEL.food,
-            tagClass: 'food',
-            finalName: chosen.item.name,
-            price: chosen.item.price,
-            animate: () => singles[Math.floor(Math.random() * singles.length)].name,
-          },
-        };
-      }
-      const w = chosen.win;
-      const ks = validKs(w);
-      const k = ks[Math.floor(Math.random() * ks.length)];
-      const dishes = sampleDishes(w.dishes, k);
-      return {
-        entityId: chosen.id,
-        slot: {
-          tag: K_LABEL[k],
-          tagClass: 'window',
-          finalName: dishes.map((d) => d.name).join(' + '),
-          sub: w.name,
-          price: windowPrice(w, k, dishes),
-          animate: () => {
-            const rw = windows[Math.floor(Math.random() * windows.length)];
-            const rk = validKs(rw)[Math.floor(Math.random() * validKs(rw).length)];
-            return sampleDishes(rw.dishes, rk).map((d) => d.name).join(' + ');
-          },
-        },
-      };
-    };
-
-    const drawDrink = (useExclusion) => {
-      const dp = (useExclusion && drinks.length > 1 && lastPick.drink)
-        ? drinks.filter((i) => i.id !== lastPick.drink)
-        : drinks;
-      if (!dp.length) {
-        return {
-          fail: pf
-            ? `价格区间${pfLabel} 内没有可选的饮品`
-            : (currentMode === 'drink' ? '该餐段还没有录入饮品' : '该餐段暂无饮品'),
-        };
-      }
-      const picked = dp[Math.floor(Math.random() * dp.length)];
-      return {
-        entityId: picked.id,
-        slot: {
-          tag: TYPE_LABEL.drink,
-          tagClass: 'drink',
-          finalName: picked.name,
-          price: picked.price,
-          animate: () => drinks[Math.floor(Math.random() * drinks.length)].name,
-        },
-      };
-    };
-
-    // 价格约束用拒绝采样：每次独立抽取，价格（组合模式为合计）落在区间内才接受。
-    // 前半程保留防连抽；后半程放宽（价格约束优先于防连抽），否则满足约束所需的
-    // 候选可能恰被连续排除，导致明明有解却报「凑不出」。
-    const MAX_TRIES = 40;
-    const tries = pf ? MAX_TRIES : 1;
-    let foodResult = null;
-    let drinkResult = null;
-    for (let attempt = 0; attempt < tries; attempt += 1) {
-      const useExclusion = attempt < Math.ceil(tries / 2);
-      foodResult = wantFood ? drawFood(useExclusion) : null;
-      drinkResult = wantDrink ? drawDrink(useExclusion) : null;
-      if ((foodResult && foodResult.fail) || (drinkResult && drinkResult.fail)) break;
-      if (!pf) break;
-      const prices = [];
-      if (foodResult) prices.push(foodResult.slot.price);
-      if (drinkResult) prices.push(drinkResult.slot.price);
-      if (prices.some((p) => p == null)) continue; // 拼出的实际价格未知，重试
-      const total = prices.reduce((a, b) => a + b, 0);
-      if (total >= pf.lo - 1e-9 && total <= pf.hi + 1e-9) break;
-      if (attempt === tries - 1) {
-        foodResult = {
-          fail: `价格区间${pfLabel} 内凑不出${wantFood && wantDrink ? '餐品 + 饮品组合' : '结果'}，试试放宽区间或切换模式`,
-        };
-        drinkResult = null;
+      dists[slot] = MealRandom.distribution(pool, { lastKey: last[`${currentMeal}:${slot}`] });
+      if (!dists[slot].length) {
+        const kindLabel = slot === 'food' ? '餐品 / 窗口' : '饮品';
+        emptyNotes[slot] = pf
+          ? `价格区间${pfLabel} 内没有可选的${kindLabel}`
+          : `该餐段暂无${kindLabel}`;
       }
     }
 
-    const failNote = (foodResult && foodResult.fail) || (drinkResult && drinkResult.fail) || null;
-    const slots = [];
-    let foodEntityId = null;
-    let drinkEntityId = null;
-    if (foodResult && foodResult.slot) {
-      slots.push(foodResult.slot);
-      foodEntityId = foodResult.entityId;
-    }
-    if (drinkResult && drinkResult.slot) {
-      slots.push(drinkResult.slot);
-      drinkEntityId = drinkResult.entityId;
-    }
-
-    if (!slots.length) {
-      toast(failNote || '先去设置录入一些条目吧');
-      if (failNote) {
-        // 清掉旧结果，避免残留的、可能不满足区间的上一轮误导
-        const resultEl = $('#result');
-        resultEl.textContent = '';
-        resultEl.appendChild(el('p', 'placeholder', failNote));
-      }
+    if (slotsWanted.every((s) => emptyNotes[s])) {
+      const blocked = blockedCountFor(currentMeal);
+      const msg = blocked && !pf
+        ? `可随机条目都被忌口了（${blocked} 个），去设置-偏好与忌口恢复`
+        : emptyNotes[slotsWanted[0]];
+      toast(msg);
+      const resultEl = $('#result');
+      resultEl.textContent = '';
+      resultEl.appendChild(el('p', 'placeholder', msg));
       return;
     }
 
-    // 同一实体避免与上一次连续重复（候选 > 1 时）
-    lastPick.food = foodEntityId;
-    lastPick.drink = drinkEntityId;
+    // 抽中窗口后的落定：拼法限制在价格可行的范围内（预过滤保证至少一种）
+    const materialize = (chosen) => {
+      const e = chosen.entity;
+      if (chosen.kind === 'item') {
+        return {
+          kind: 'item', entity: e, name: e.name, sub: null,
+          price: e.price, tag: TYPE_LABEL[e.type], tagClass: e.type,
+        };
+      }
+      let ks = validKs(e);
+      if (pf) {
+        ks = ks.filter((k) => {
+          const r = windowPriceRange(e, k);
+          return !!r && r[0] <= pf.hi && (currentMode === 'combo' ? true : r[1] >= pf.lo);
+        });
+      }
+      const k = ks[Math.floor(Math.random() * ks.length)];
+      const dishes = MealRandom.sampleDishes(e.dishes, k);
+      return {
+        kind: 'window', entity: e, name: dishes.map((d) => d.name).join(' + '), sub: e.name,
+        price: windowPrice(e, k, dishes), tag: K_LABEL[k], tagClass: 'window',
+      };
+    };
+
+    // 价格约束用拒绝采样：得到的是「价格可行」条件下的分布。
+    // 软防连抽不会排除候选，因此不存在无解死循环；上限尝试只防区间本身无解。
+    const MAX_TRIES = 40;
+    const tries = pf ? MAX_TRIES : 1;
+    let drawn = null;
+    let failMsg = null;
+    for (let attempt = 0; attempt < tries && !drawn; attempt += 1) {
+      const out = {};
+      for (const slot of slotsWanted) {
+        if (!dists[slot].length) continue;
+        const chosen = drawRow(dists[slot]);
+        out[slot] = materialize(chosen);
+        out[slot].slot = slot;
+        out[slot].meta = { weight: chosen.weight, probability: chosen.probability, key: chosen.key };
+      }
+      if (!pf) { drawn = out; break; }
+      const picks = slotsWanted.filter((s) => out[s]);
+      const prices = picks.map((s) => out[s].price);
+      const ok = prices.length === picks.length // 有未知价格则不可行（预过滤后理论上不会出现）
+        && (picks.length > 1
+          ? prices.reduce((a, b) => a + b, 0) <= pf.hi + 1e-9 && prices.reduce((a, b) => a + b, 0) >= pf.lo - 1e-9
+          : prices[0] >= pf.lo - 1e-9 && prices[0] <= pf.hi + 1e-9);
+      if (ok) drawn = out;
+      else if (attempt === tries - 1) {
+        failMsg = `价格区间${pfLabel} 内凑不出${picks.length > 1 ? '餐品 + 饮品组合' : '结果'}，试试放宽区间或切换模式`;
+      }
+    }
+
+    if (!drawn) {
+      toast(failMsg || '先去设置录入一些条目吧');
+      const resultEl = $('#result');
+      resultEl.textContent = '';
+      resultEl.appendChild(el('p', 'placeholder', failMsg || '先去设置录入一些条目吧'));
+      return;
+    }
+
+    // 会话内状态：模块结果（供反馈/撤销）与上轮指针（meal:slot 作用域）
+    const moduleResult = { food: null, drink: null, votes: {} };
+    for (const slot of slotsWanted) {
+      if (drawn[slot]) {
+        moduleResult[slot] = { entity: drawn[slot].entity, price: drawn[slot].price };
+        last[`${currentMeal}:${slot}`] = drawn[slot].meta.key;
+      }
+    }
+    currentResult = moduleResult;
+
+    const slots = ['food', 'drink'].filter((s) => drawn[s]).map((s) => drawn[s]);
+    const animateFor = (slot) => {
+      const rows = dists[slot] || [];
+      return () => {
+        const c = rows[Math.floor(Math.random() * rows.length)];
+        if (c.kind === 'item') return c.entity.name;
+        const ks2 = validKs(c.entity);
+        const k2 = ks2[Math.floor(Math.random() * ks2.length)];
+        return MealRandom.sampleDishes(c.entity.dishes, k2).map((d) => d.name).join(' + ');
+      };
+    };
 
     const meal = MEALS[currentMeal];
     const result = $('#result');
@@ -706,7 +703,8 @@
 
     const totalEl = el('div', 'result-total', '');
     card.appendChild(totalEl);
-    if (failNote) card.appendChild(el('div', 'result-note', failNote));
+    const partialNotes = slotsWanted.filter((s) => emptyNotes[s]).map((s) => emptyNotes[s]);
+    if (partialNotes.length) card.appendChild(el('div', 'result-note', partialNotes.join('，')));
     result.appendChild(card);
 
     rolling = true;
@@ -719,10 +717,11 @@
       if (Date.now() - startedAt >= 700) {
         clearInterval(timer);
         slots.forEach((s, idx) => {
-          s.nameEl.textContent = s.finalName;
+          s.nameEl.textContent = s.name;
           s.nameEl.classList.remove('rolling');
           if (s.sub) s.nameEl.after(el('span', 'sub', s.sub));
           rowEls[idx].appendChild(el('span', 'price', s.price == null ? '价格未知' : `¥${fmt(s.price)}`));
+          rowEls[idx].appendChild(buildFbGroup(s.slot, s.meta));
         });
         if (slots.length > 1) {
           const priced = slots.filter((s) => s.price != null);
@@ -735,8 +734,95 @@
         rollBtn.disabled = false;
         return;
       }
-      slots.forEach((s) => { s.nameEl.textContent = s.animate(); });
+      slots.forEach((s) => { s.nameEl.textContent = animateFor(s.slot)(); });
     }, 70);
+  }
+
+  // ---------- 偏好反馈（👍 / 👎 / 🚫，算法见 meal-random.js） ----------
+  const findEntity = (id) => state.items.find((i) => i.id === id) || state.windows.find((w) => w.id === id);
+
+  function entityFlag(e) {
+    const p = MealRandom.readPreference(e);
+    if (p.blocked) return el('span', 'row-flag block', '🚫 忌口');
+    const w = MealRandom.weight(e);
+    if (w > 1.01) return el('span', 'row-flag up', `偏爱 ×${w.toFixed(2)}`);
+    if (w < 0.99) return el('span', 'row-flag down', `降权 ×${w.toFixed(2)}`);
+    return null;
+  }
+
+  const metaText = (m) => `权重 ×${m.weight.toFixed(2)} · 概率 ${(m.probability * 100).toFixed(1)}%`;
+
+  function buildFbGroup(slot, meta) {
+    const wrap = el('span', 'fb');
+    wrap.dataset.slot = slot;
+    wrap.dataset.meta = metaText(meta);
+    [['like', '👍', '好吃，以后多推荐'], ['dislike', '👎', '不好吃，以后少推荐'], ['block', '🚫', '忌口，不再推荐']].forEach(([act, icon, title]) => {
+      const b = el('button', `fb-btn ${act}`, icon);
+      b.type = 'button';
+      b.title = title;
+      b.dataset.vote = act;
+      b.dataset.slot = slot;
+      wrap.appendChild(b);
+    });
+    const undo = el('button', 'fb-btn undo', '↩ 撤销');
+    undo.type = 'button';
+    undo.title = '撤销本条反馈';
+    undo.dataset.undo = slot;
+    undo.hidden = true;
+    wrap.appendChild(undo);
+    wrap.appendChild(el('span', 'fb-state', metaText(meta)));
+    return wrap;
+  }
+
+  function updateFbUI(slot) {
+    const group = document.querySelector(`.fb[data-slot="${slot}"]`);
+    if (!group || !currentResult || !currentResult[slot]) return;
+    const voted = currentResult.votes[slot];
+    group.querySelectorAll('.fb-btn').forEach((b) => {
+      if (b.dataset.undo) {
+        b.hidden = !voted;
+        return;
+      }
+      b.classList.toggle('active', !!voted && b.dataset.vote === voted.action);
+    });
+    const stateEl = group.querySelector('.fb-state');
+    if (!voted) {
+      stateEl.textContent = group.dataset.meta;
+      return;
+    }
+    const entity = currentResult[slot].entity;
+    stateEl.textContent = voted.action === 'block'
+      ? '已忌口 🚫'
+      : `${voted.action === 'like' ? '👍' : '👎'} 权重 ×${MealRandom.weight(entity).toFixed(2)}`;
+  }
+
+  function renderPrefPanel() {
+    const list = $('#prefList');
+    list.textContent = '';
+    const affected = [
+      ...state.items.map((x) => ({ x, kind: TYPE_LABEL[x.type] })),
+      ...state.windows.map((x) => ({ x, kind: '窗口' })),
+    ].filter(({ x }) => {
+      const p = MealRandom.readPreference(x);
+      return p.blocked || p.updatedAt != null || p.weight !== 1;
+    });
+    $('#prefEmpty').hidden = affected.length > 0;
+    affected.forEach(({ x, kind }) => {
+      const p = MealRandom.readPreference(x);
+      const w = MealRandom.weight(x);
+      const stateText = p.blocked
+        ? '已忌口 🚫'
+        : (w > 0.99 && w < 1.01 ? `已随时间恢复中性（记录 ×${p.weight.toFixed(2)}）` : `反馈 ×${p.weight.toFixed(2)} · 当前 ×${w.toFixed(2)}`);
+      const li = el('li');
+      li.appendChild(el('span', 'name', x.name));
+      li.appendChild(el('span', 'kind', kind));
+      li.appendChild(el('span', 'state', stateText));
+      const btn = el('button', 'btn ghost small', '恢复默认');
+      btn.type = 'button';
+      btn.dataset.rid = x.id;
+      li.appendChild(btn);
+      list.appendChild(li);
+    });
   }
 
   // ---------- 录入 / 编辑：普通条目 ----------
@@ -1115,6 +1201,60 @@
     });
     $('#pfMin').addEventListener('input', renderPoolSummary);
     $('#pfMax').addEventListener('input', renderPoolSummary);
+
+    // 结果反馈：每槽一票，改选先撤销（模块强制）
+    $('#result').addEventListener('click', (e) => {
+      const undoBtn = e.target.closest('.fb-btn[data-undo]');
+      if (undoBtn) {
+        const slot = undoBtn.dataset.undo;
+        if (MealRandom.undoVote(currentResult, slot)) {
+          save();
+          toast('已撤销该条反馈');
+          updateFbUI(slot);
+          renderAll();
+        } else {
+          toast('该反馈已被后续操作覆盖，无法撤销');
+          updateFbUI(slot);
+        }
+        return;
+      }
+      const voteBtn = e.target.closest('.fb-btn[data-vote]');
+      if (!voteBtn || !currentResult) return;
+      const slot = voteBtn.dataset.slot;
+      const action = voteBtn.dataset.vote;
+      if (currentResult.votes[slot]) {
+        toast('本条结果已反馈过，先点撤销可改选');
+        return;
+      }
+      try {
+        if (MealRandom.vote(currentResult, slot, action)) {
+          currentResult.votes[slot].action = action; // 供 UI 高亮
+          save();
+          const entity = currentResult[slot].entity;
+          const msgs = {
+            like: '已记录：以后多推荐',
+            dislike: '已记录：以后少推荐',
+            block: '已加入忌口（设置-偏好与忌口可恢复）',
+          };
+          toast(`${msgs[action]}「${entity.name}」`);
+          updateFbUI(slot);
+          renderAll();
+        }
+      } catch (err) {
+        toast(String(err.message || err));
+      }
+    });
+
+    $('#prefList').addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-rid]');
+      if (!btn) return;
+      const entity = findEntity(btn.dataset.rid);
+      if (!entity) return;
+      MealRandom.resetPreference(entity);
+      save();
+      renderAll();
+      toast(`已恢复「${entity.name}」默认偏好`);
+    });
 
     $('#addItemForm').addEventListener('submit', (e) => {
       e.preventDefault();

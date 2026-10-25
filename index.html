@@ -154,6 +154,15 @@
           </div>
         </section>
 
+        <section class="panel pref-panel">
+          <h2>偏好与忌口</h2>
+          <p class="panel-hint">在推荐结果里点 👍 / 👎 / 🚫 会记录到这里；权重随时间向中性恢复（30 天半衰），忌口不会自动解除</p>
+          <ul id="prefList" class="pref-list"></ul>
+          <div id="prefEmpty" class="empty" hidden>
+            <p>还没有偏好记录，去推荐页随机一次试试</p>
+          </div>
+        </section>
+
         <section class="panel ai-import-panel">
           <h2>AI 批量导入</h2>
           <p class="panel-hint">把菜单拍照发给任意 AI，附上下方提示词，再将 AI 输出的 JSON 粘贴到下面即可批量导入</p>
@@ -197,11 +206,12 @@
     </section>
 
     <footer>
-      <p>数据保存在当前浏览器本地（localStorage），不会上传 · v0.4</p>
+      <p>数据保存在当前浏览器本地（localStorage），不会上传 · v0.5</p>
     </footer>
   </div>
 
   <div id="toast" class="toast" aria-live="polite" hidden></div>
+  <script src="meal-random.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
