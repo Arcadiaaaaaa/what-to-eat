@@ -165,7 +165,7 @@
       if (Array.isArray(data.history)) {
         state.history = data.history
           .filter((r) => r && typeof r === 'object' && (r.food || r.drink))
-          .slice(0, 30);
+          .slice(0, 100);
       }
       if (data.last && typeof data.last === 'object') last = data.last;
     } catch (err) {
@@ -178,7 +178,7 @@
       version: 2,
       items: state.items,
       windows: state.windows,
-      history: state.history.slice(0, 30),
+      history: state.history.slice(0, 100),
       last,
     }));
   }
@@ -372,9 +372,10 @@
 
   // ---------- 统计（基于历史记录：吃了什么 / 花了多少钱 / 频率） ----------
   const STATS_RANGE_LABEL = { today: '今天', week: '最近 7 天', month: '最近 30 天', all: '全部' };
+  const HISTORY_CAP = 100;
 
   function statsRecords() {
-    if (statsRange === 'all') return state.history;
+    if (statsRange === 'all') return state.history.slice(0, HISTORY_CAP);
     if (statsRange === 'today') {
       const d = new Date();
       d.setHours(0, 0, 0, 0);
@@ -389,7 +390,9 @@
     const mealList = $('#statsMealList');
     const rankEl = $('#statRank');
     if (!cards || !mealList || !rankEl) return;
-    $('#statsTitle').textContent = `${STATS_RANGE_LABEL[statsRange]}的账`;
+    const capNote = statsRange === 'all' && state.history.length >= HISTORY_CAP
+      ? `（已达记录上限 ${HISTORY_CAP} 条）` : '';
+    $('#statsTitle').textContent = `${STATS_RANGE_LABEL[statsRange]}的账${capNote}`;
     cards.textContent = '';
     mealList.textContent = '';
     rankEl.textContent = '';
@@ -777,7 +780,7 @@
     }
     last = r.nextLast; // 结果正式展示，采用新的上轮指针
     state.history.unshift(record);
-    state.history = state.history.slice(0, 30);
+    state.history = state.history.slice(0, 100);
     save();
     renderHistory();
 
@@ -1718,7 +1721,7 @@
           addedRecords += 1;
         });
       state.history.sort((a, b) => b.ts - a.ts);
-      state.history = state.history.slice(0, 30);
+      state.history = state.history.slice(0, 100);
       if (data.last && typeof data.last === 'object') {
         last = { ...last, ...data.last };
       }
