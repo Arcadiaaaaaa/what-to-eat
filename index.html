@@ -4,68 +4,83 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="录入你的餐品、饮品与拼菜窗口，按早/午/晚餐随机推荐今天吃什么。">
-  <meta name="theme-color" content="#e8590c">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f3ece0" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1a1613" media="(prefers-color-scheme: dark)">
   <title>今天吃什么 · 随机餐品推荐</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍚</text></svg>">
+  <link rel="icon" type="image/svg+xml" href="assets/chi-mark.svg">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icon-180.png">
+  <!-- 字体非阻塞加载：Google Fonts 不可达时直接回退系统宋体 / 等宽，版面不变 -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Noto+Serif+SC:wght@700;900&display=swap" media="print" onload="this.media='all'">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div class="container">
-    <header>
+    <header class="site-head">
       <div class="header-row">
-        <h1>今天吃什么 🍚</h1>
-        <nav class="view-nav">
-          <a href="#/" class="view-link" data-view="recommend">🎲 推荐</a>
-          <a href="#/settings" class="view-link" data-view="settings">⚙️ 设置</a>
+        <div class="brand">
+          <picture>
+            <source srcset="assets/chi-mark-dark.svg" media="(prefers-color-scheme: dark)">
+            <img class="brand-mark" src="assets/chi-mark.svg" alt="" width="44" height="44">
+          </picture>
+          <div class="brand-text">
+            <h1>今天吃什么</h1>
+            <p class="subtitle">在设置里录入你的菜单，随机帮你拿主意</p>
+          </div>
+        </div>
+        <nav class="view-nav" aria-label="视图">
+          <a href="#/" class="view-link" data-view="recommend">推荐</a>
+          <a href="#/settings" class="view-link" data-view="settings">设置</a>
         </nav>
       </div>
-      <p class="subtitle">在设置里录入你的菜单，随机帮你拿主意</p>
     </header>
 
     <!-- ========== 推荐视图 ========== -->
     <section id="viewRecommend" class="view">
-      <nav class="tabs">
-        <button type="button" class="tab active" data-meal="breakfast">🌅 早餐</button>
-        <button type="button" class="tab" data-meal="lunch">☀️ 午餐</button>
-        <button type="button" class="tab" data-meal="dinner">🌙 晚餐</button>
+      <nav class="tabs" aria-label="餐段">
+        <button type="button" class="tab active" data-meal="breakfast"><span class="tab-mark">早</span>早餐</button>
+        <button type="button" class="tab" data-meal="lunch"><span class="tab-mark">午</span>午餐</button>
+        <button type="button" class="tab" data-meal="dinner"><span class="tab-mark">晚</span>晚餐</button>
       </nav>
       <p class="pool-summary" id="poolSummary"></p>
 
-      <section class="panel result-panel">
-        <div class="mode-toggle" id="modeToggle">
-          <button type="button" class="mode active" data-mode="combo">餐品 + 饮品</button>
-          <button type="button" class="mode" data-mode="food">仅餐品</button>
-          <button type="button" class="mode" data-mode="drink">仅饮品</button>
-        </div>
-        <div class="price-filter">
-          <label class="choice pf-toggle"><input type="checkbox" id="pfEnabled"><span class="chip pf-chip">💰 限定价格</span></label>
-          <div class="pf-inputs" id="pfInputs" hidden>
-            <input type="number" id="pfMin" placeholder="最低 ¥" min="0" step="any" inputmode="decimal">
-            <span class="pf-dash">—</span>
-            <input type="number" id="pfMax" placeholder="最高 ¥" min="0" step="any" inputmode="decimal">
+      <div class="counter">
+        <section class="panel console">
+          <div class="mode-toggle" id="modeToggle">
+            <button type="button" class="mode active" data-mode="combo">餐品 + 饮品</button>
+            <button type="button" class="mode" data-mode="food">仅餐品</button>
+            <button type="button" class="mode" data-mode="drink">仅饮品</button>
           </div>
-          <p class="pf-hint">开启后按结果价格过滤（组合模式按餐品 + 饮品合计）；未标价的条目不参与</p>
-        </div>
-        <button type="button" class="btn roll" id="rollBtn">🎲 随机推荐</button>
-        <div class="result" id="result">
-          <p class="placeholder">点击「随机推荐」，帮你拿主意</p>
-        </div>
-      </section>
+          <div class="price-filter">
+            <label class="choice pf-toggle"><input type="checkbox" id="pfEnabled"><span class="chip pf-chip">限定价格</span></label>
+            <div class="pf-inputs" id="pfInputs" hidden>
+              <input type="number" id="pfMin" placeholder="最低 ¥" min="0" step="any" inputmode="decimal">
+              <span class="pf-dash">—</span>
+              <input type="number" id="pfMax" placeholder="最高 ¥" min="0" step="any" inputmode="decimal">
+            </div>
+            <p class="pf-hint">开启后按结果价格过滤（组合模式按餐品 + 饮品合计）；未标价的条目不参与</p>
+          </div>
+          <button type="button" class="btn roll" id="rollBtn">随机推荐 <span class="roll-hint">· 出票</span></button>
+        </section>
 
-      <details class="history-box" id="historyBox" hidden>
-        <summary>📜 最近的随机记录</summary>
-        <ul id="historyList" class="history-list"></ul>
-      </details>
+        <div class="result" id="result" aria-live="polite"></div>
+
+        <details class="history-box" id="historyBox" hidden>
+          <summary>最近的随机记录</summary>
+          <ul id="historyList" class="history-list"></ul>
+        </details>
+      </div>
     </section>
 
     <!-- ========== 设置视图 ========== -->
     <section id="viewSettings" class="view" hidden>
-      <nav class="tabs">
-        <button type="button" class="tab active" data-meal="breakfast">🌅 早餐</button>
-        <button type="button" class="tab" data-meal="lunch">☀️ 午餐</button>
-        <button type="button" class="tab" data-meal="dinner">🌙 晚餐</button>
+      <nav class="tabs" aria-label="餐段">
+        <button type="button" class="tab active" data-meal="breakfast"><span class="tab-mark">早</span>早餐</button>
+        <button type="button" class="tab" data-meal="lunch"><span class="tab-mark">午</span>午餐</button>
+        <button type="button" class="tab" data-meal="dinner"><span class="tab-mark">晚</span>晚餐</button>
       </nav>
 
       <div class="settings-layout">
@@ -84,8 +99,8 @@
             <div class="field">
               <span class="field-label">类别</span>
               <div class="type-toggle">
-                <label class="choice"><input type="radio" name="itemType" value="food" checked><span class="chip type-food">🍚 餐品</span></label>
-                <label class="choice"><input type="radio" name="itemType" value="drink"><span class="chip type-drink">🥤 饮品</span></label>
+                <label class="choice"><input type="radio" name="itemType" value="food" checked><span class="chip type-food">餐品</span></label>
+                <label class="choice"><input type="radio" name="itemType" value="drink"><span class="chip type-drink">饮品</span></label>
               </div>
             </div>
             <fieldset class="meal-picker">
@@ -105,7 +120,7 @@
         </section>
 
         <section class="panel list-panel">
-          <h2 id="listTitle">🌅 早餐清单</h2>
+          <h2 id="listTitle">早餐清单</h2>
           <ul id="itemList" class="item-list"></ul>
           <div id="emptyState" class="empty" hidden>
             <p>这个餐段还没有录入餐品 / 饮品</p>
@@ -154,7 +169,7 @@
         </section>
 
         <section class="panel window-list-panel">
-          <h2 id="windowListTitle">🥘 早餐拼菜窗口</h2>
+          <h2 id="windowListTitle">早餐拼菜窗口</h2>
           <div id="windowList" class="window-list"></div>
           <div id="windowEmpty" class="empty" hidden>
             <p>这个餐段还没有拼菜窗口</p>
@@ -163,7 +178,7 @@
 
         <section class="panel pref-panel">
           <h2>偏好与忌口</h2>
-          <p class="panel-hint">在推荐结果里点 👍 / 👎 / 🚫 会记录到这里；权重随时间向中性恢复（30 天半衰），忌口不会自动解除</p>
+          <p class="panel-hint">在推荐结果里点「好吃 / 不爱 / 忌口」会记录到这里；权重随时间向中性恢复（30 天半衰），忌口不会自动解除</p>
           <ul id="prefList" class="pref-list"></ul>
           <div id="prefEmpty" class="empty" hidden>
             <p>还没有偏好记录，去推荐页随机一次试试</p>

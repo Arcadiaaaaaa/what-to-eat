@@ -3,7 +3,7 @@
    发布新版本时把 CACHE 版本号 +1 即可让旧缓存失效。 */
 'use strict';
 
-const CACHE = 'what-to-eat-v1';
+const CACHE = 'what-to-eat-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -11,6 +11,8 @@ const ASSETS = [
   './app.js',
   './meal-random.js',
   './manifest.webmanifest',
+  './assets/chi-mark.svg',
+  './assets/chi-mark-dark.svg',
   './icon-192.png',
   './icon-512.png',
 ];
