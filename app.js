@@ -245,9 +245,8 @@
     return w.pickOptions.filter((k) => K_LABEL[k] && k <= n);
   };
 
-  // 模块按全部菜品判断拼法可行性，这里再按"未忌口菜品数"收紧
-  const candidatesFor = (meal, slot) => MealRandom.candidates(state, meal, slot)
-    .filter((c) => c.kind !== 'window' || validKs(c.entity).length > 0);
+  // 模块已支持菜品级忌口与权重，无需 app 侧兜底；此处仅作调用别名
+  const candidatesFor = (meal, slot) => MealRandom.candidates(state, meal, slot);
 
   function foodCandidates(meal) {
     const pool = candidatesFor(meal, 'food');
@@ -259,20 +258,7 @@
 
   const drinksForMeal = (meal) => candidatesFor(meal, 'drink').map((c) => c.entity);
 
-  // 累计概率抽样已在模块导出（MealRandom.draw），直接使用
-
-  // 窗口内按菜品偏好权重不放回抽 K 道菜（偏好机制与实体级一致）
-  function weightedDishes(w, k) {
-    const pool = eligibleDishes(w).map((d) => ({ kind: 'dish', key: `dish:${d.id}`, entity: d }));
-    const picked = [];
-    while (picked.length < k && pool.length) {
-      const rows = MealRandom.distribution(pool, {});
-      const chosen = MealRandom.draw(rows, Math.random);
-      picked.push(chosen.entity);
-      pool.splice(pool.findIndex((c) => c.key === chosen.key), 1);
-    }
-    return picked;
-  }
+  // 窗口内按菜品偏好权重不放回抽 K 道菜：已由模块内部实现，换菜菜单直接列可选菜
 
   const blockedCountFor = (meal) =>
     state.items.filter((i) => i.meals.includes(meal) && MealRandom.readPreference(i).blocked).length
@@ -561,40 +547,10 @@
     }
     const pf = pfRaw;
 
-    // 过滤（先过滤后加权）、组合约束（精确枚举，有解必出）、窗口落定全部由模块完成
-    let r;
-    for (let t = 0; t < 5; t += 1) {
-      r = MealRandom.recommend(state, {
-        meal: currentMeal, mode: currentMode, last, priceRange: pf,
-      });
-      const badDish = r.food && r.food.dishes
-        && r.food.dishes.some((d) => MealRandom.readPreference(d).blocked);
-      if (!badDish) break; // 忌口菜混入组合时整次重抽（模块不知晓菜品级忌口）
-    }
-
-    // 菜品偏好参与窗口抽菜：模块内部按均匀抽菜，这里在价格仍满足的前提下
-    // 用菜品权重重抽；重抽后越界则保留模块的精确解
-    if (r.food && r.food.kind === 'window' && r.food.dishes && r.food.entity) {
-      const win = r.food.entity;
-      const k = r.food.k;
-      const elig = eligibleDishes(win);
-      const weightsMatter = elig.some((d) => MealRandom.weight(d) !== 1);
-      if ((weightsMatter || elig.length !== win.dishes.length) && elig.length >= k) {
-        const candidate = weightedDishes(win, k);
-        const fixed = win.fixedPrices && win.fixedPrices[k];
-        const cprice = typeof fixed === 'number'
-          ? fixed
-          : (candidate.some((d) => d.price == null)
-            ? null
-            : Math.round(candidate.reduce((acc, d) => acc + d.price, 0) * 100) / 100);
-        let ok = !r.priceRange;
-        if (r.priceRange && cprice != null) {
-          const total = r.drink && r.drink.price != null ? cprice + r.drink.price : cprice;
-          ok = total >= r.priceRange.lo - 1e-9 && total <= r.priceRange.hi + 1e-9;
-        }
-        if (ok) r.food = { ...r.food, dishes: candidate, price: cprice };
-      }
-    }
+    // 过滤（先过滤后加权）、组合约束（精确枚举）、窗口落定（含菜品忌口与权重）全部由模块完成
+    const r = MealRandom.recommend(state, {
+      meal: currentMeal, mode: currentMode, last, priceRange: pf,
+    });
 
     const slotLabel = (s) => (s === 'food' ? '餐品 / 窗口' : '饮品');
     const rangeLabel = r.priceRange ? ` ${boundsLabel(r.priceRange)}` : '';
