@@ -237,6 +237,7 @@
       meals: normalizeMeals(o.meals).length ? normalizeMeals(o.meals) : ['breakfast', 'lunch', 'dinner'],
       shop: strField(o.shop, 20),
       location: strField(o.location, 30),
+      sample: o.sample === true,
     };
   }
 
@@ -265,6 +266,7 @@
       meals: normalizeMeals(o.meals).length ? normalizeMeals(o.meals) : ['breakfast', 'lunch', 'dinner'],
       shop: strField(o.shop, 20),
       location: strField(o.location, 30),
+      sample: o.sample === true,
       pickOptions: pickOptions.sort((a, b) => a - b),
       fixedPrices,
       dishes,
@@ -1478,11 +1480,29 @@
     toast(added ? `已加载 ${added} 条示例数据` : '示例数据都已存在');
   }
 
-  // 示例数据识别：打标的 + 与示例清单同名的（兼容打标之前载入的）
-  const isSampleItem = (i) => i.sample === true
-    || SAMPLE_ITEMS.some((s) => s.name === i.name && s.type === i.type);
-  const isSampleWindow = (w) => w.sample === true
-    || SAMPLE_WINDOWS.some((s) => s.name === w.name);
+  // 示例数据识别：打标的（loadSample 时写入）+ 「完全未改动的克隆」——
+  // 名称/类型/价格/餐段（窗口还比对拼法/一口价/菜品清单）与示例逐项全等，
+  // 且无店名、偏好为中性。任何一项被用户改过或 AI 导入的差异条目都不会被误清。
+  const neutralPref = (e) => {
+    const p = MealRandom.readPreference(e);
+    return !p.blocked && p.updatedAt == null && p.weight === 1;
+  };
+  const isUntouchedItemClone = (i) => SAMPLE_ITEMS.some((s) => s.name === i.name
+    && s.type === i.type
+    && (s.price ?? null) === (i.price ?? null)
+    && [...s.meals].sort().join() === [...i.meals].sort().join()
+    && !i.shop && !i.location && neutralPref(i));
+  const isUntouchedWindowClone = (w) => SAMPLE_WINDOWS.some((s) => {
+    if (s.name !== w.name) return false;
+    if ([...s.meals].sort().join() !== [...w.meals].sort().join()) return false;
+    if (JSON.stringify([...s.pickOptions].sort()) !== JSON.stringify([...w.pickOptions].sort())) return false;
+    if (JSON.stringify(s.fixedPrices || {}) !== JSON.stringify(w.fixedPrices || {})) return false;
+    if (w.shop || w.location || !neutralPref(w)) return false;
+    const dishKey = (list) => list.map((d) => `${d.name}|${d.price}`).sort().join(';');
+    return dishKey(s.dishes) === dishKey(w.dishes);
+  });
+  const isSampleItem = (i) => i.sample === true || isUntouchedItemClone(i);
+  const isSampleWindow = (w) => w.sample === true || isUntouchedWindowClone(w);
 
   function sampleCount() {
     return state.items.filter(isSampleItem).length + state.windows.filter(isSampleWindow).length;
@@ -1542,7 +1562,7 @@
   }
 
   function exportData() {
-    if (!state.items.length && !state.windows.length) {
+    if (!state.items.length && !state.windows.length && !state.history.length) {
       toast('还没有数据可导出');
       return;
     }
@@ -1552,6 +1572,8 @@
         exportedAt: new Date().toISOString(),
         items: state.items,
         windows: state.windows,
+        history: state.history,
+        last,
       },
       null,
       2
@@ -1567,6 +1589,70 @@
   }
 
   // 解析一段文本为数据并合并导入；容忍代码围栏、中文餐段/拼法、带单位的价格等写法
+  // 历史记录的导入校验：字段宽松但结构完整，坏记录整条丢弃
+  function sanitizeRecord(o) {
+    if (!o || typeof o !== 'object' || typeof o.id !== 'string' || !o.id) return null;
+    if (!Number.isFinite(o.ts) || o.ts <= 0) return null;
+    if (!MEALS[o.meal]) return null;
+    const r = {
+      id: o.id, ts: o.ts, meal: o.meal,
+      mode: ['combo', 'food', 'drink'].includes(o.mode) ? o.mode : 'combo',
+      adjusted: o.adjusted === true,
+      note: typeof o.note === 'string' ? o.note.slice(0, 120) : null,
+      votes: { dishes: {} },
+      food: null, drink: null,
+    };
+    const voteOk = (v) => v && ['like', 'dislike', 'block'].includes(v.action) ? { action: v.action } : null;
+    if (o.votes && typeof o.votes === 'object') {
+      ['food', 'drink'].forEach((s) => {
+        const v = voteOk(o.votes[s]);
+        if (v) r.votes[s] = v;
+      });
+      if (o.votes.dishes && typeof o.votes.dishes === 'object') {
+        Object.entries(o.votes.dishes).forEach(([id, v]) => {
+          const vv = voteOk(v);
+          if (vv) r.votes.dishes[id] = vv;
+        });
+      }
+    }
+    const meta = (m) => (m && typeof m === 'object' ? m : null);
+    const snapItem = (s) => (s && typeof s === 'object' && typeof s.name === 'string' && s.name.trim()
+      ? {
+        kind: 'item', entityId: typeof s.entityId === 'string' ? s.entityId : uid(),
+        name: s.name.trim().slice(0, 40),
+        shop: strField(s.shop, 20), location: strField(s.location, 30),
+        price: typeof s.price === 'number' && s.price >= 0 ? s.price : null,
+        meta: meta(s.meta),
+      } : null);
+    if (o.food && typeof o.food === 'object' && o.food.kind === 'window'
+      && Array.isArray(o.food.dishes)) {
+      const dishes = o.food.dishes
+        .filter((d) => d && typeof d.name === 'string' && d.name.trim())
+        .map((d) => ({
+          id: typeof d.id === 'string' && d.id ? d.id : uid(),
+          name: d.name.trim().slice(0, 40),
+          price: typeof d.price === 'number' && d.price >= 0 ? d.price : null,
+        }));
+      if (dishes.length && typeof o.food.name === 'string' && o.food.name.trim()) {
+        r.food = {
+          kind: 'window',
+          entityId: typeof o.food.entityId === 'string' ? o.food.entityId : uid(),
+          name: o.food.name.trim().slice(0, 40),
+          k: Number.isInteger(o.food.k) ? o.food.k : dishes.length,
+          tag: typeof o.food.tag === 'string' ? o.food.tag.slice(0, 8) : '拼',
+          dishes,
+          price: typeof o.food.price === 'number' && o.food.price >= 0 ? o.food.price : null,
+          meta: meta(o.food.meta),
+          shop: strField(o.food.shop, 20), location: strField(o.food.location, 30),
+        };
+      }
+    } else if (o.food) {
+      r.food = snapItem(o.food);
+    }
+    if (o.drink) r.drink = snapItem(o.drink);
+    return r.food || r.drink ? r : null;
+  }
+
   function importFromText(text) {
     let data;
     try {
@@ -1590,13 +1676,14 @@
 
     const inItems = Array.isArray(data) ? data : data.items;
     const inWindows = !Array.isArray(data) && Array.isArray(data.windows) ? data.windows : [];
+    const hasHistory = !Array.isArray(data) && Array.isArray(data.history);
     const validItems = (Array.isArray(inItems) ? inItems : [])
       .map(normalizeRawItem).filter(Boolean).filter(isValidItem).map(sanitizeItem);
     const validWindows = inWindows
       .map(normalizeRawWindow).filter(Boolean).filter(isValidWindow).map(sanitizeWindow);
-    if (!validItems.length && !validWindows.length) {
+    if (!validItems.length && !validWindows.length && !hasHistory) {
       toast('内容里没有可用的数据');
-      return;
+      return false;
     }
 
     const itemKeys = new Set(state.items.map(itemKey));
@@ -1617,12 +1704,32 @@
       state.windows.push(w);
       addedWindows += 1;
     });
+
+    // 历史记录（按记录 id 去重合并）与上轮指针：备份恢复的完整闭环
+    let addedRecords = 0;
+    if (hasHistory) {
+      const seen = new Set(state.history.map((r) => r.id));
+      data.history
+        .map(sanitizeRecord).filter(Boolean)
+        .forEach((r) => {
+          if (seen.has(r.id)) return;
+          seen.add(r.id);
+          state.history.push(r);
+          addedRecords += 1;
+        });
+      state.history.sort((a, b) => b.ts - a.ts);
+      state.history = state.history.slice(0, 30);
+      if (data.last && typeof data.last === 'object') {
+        last = { ...last, ...data.last };
+      }
+    }
     save();
     renderAll();
 
     const parts = [];
     if (addedItems) parts.push(`条目 ${addedItems}`);
     if (addedWindows) parts.push(`窗口 ${addedWindows}`);
+    if (addedRecords) parts.push(`记录 ${addedRecords}`);
     const skipped = (validItems.length + validWindows.length) - (addedItems + addedWindows);
     if (!parts.length) { toast('导入的数据都已存在'); return false; }
     toast(`已导入 ${parts.join('、')}${skipped ? `，跳过重复 ${skipped} 条` : ''}`);
