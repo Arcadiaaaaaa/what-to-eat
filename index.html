@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="录入你的餐品与饮品，按早/午/晚餐随机推荐今天吃什么。">
+  <meta name="description" content="录入你的餐品、饮品与拼菜窗口，按早/午/晚餐随机推荐今天吃什么。">
   <meta name="theme-color" content="#e8590c">
   <title>今天吃什么 · 随机餐品推荐</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍚</text></svg>">
@@ -12,59 +12,26 @@
 <body>
   <div class="container">
     <header>
-      <h1>今天吃什么 🍚</h1>
-      <p class="subtitle">录入餐品与饮品，随机帮你拿主意</p>
+      <div class="header-row">
+        <h1>今天吃什么 🍚</h1>
+        <nav class="view-nav">
+          <a href="#/" class="view-link" data-view="recommend">🎲 推荐</a>
+          <a href="#/settings" class="view-link" data-view="settings">⚙️ 设置</a>
+        </nav>
+      </div>
+      <p class="subtitle">在设置里录入你的菜单，随机帮你拿主意</p>
     </header>
 
-    <nav class="tabs" id="mealTabs">
-      <button type="button" class="tab active" data-meal="breakfast">🌅 早餐</button>
-      <button type="button" class="tab" data-meal="lunch">☀️ 午餐</button>
-      <button type="button" class="tab" data-meal="dinner">🌙 晚餐</button>
-    </nav>
-
-    <main class="layout">
-      <section class="panel form-panel">
-        <h2>录入餐品 / 饮品</h2>
-        <form id="addItemForm" novalidate>
-          <label class="field">
-            <span class="field-label">名称</span>
-            <input type="text" id="itemName" placeholder="如：肉夹馍" maxlength="30" autocomplete="off">
-          </label>
-          <label class="field">
-            <span class="field-label">价格（可留空）</span>
-            <input type="number" id="itemPrice" placeholder="¥" min="0" step="any" inputmode="decimal">
-          </label>
-          <div class="field">
-            <span class="field-label">类别</span>
-            <div class="type-toggle">
-              <label class="choice"><input type="radio" name="itemType" value="food" checked><span class="chip type-food">🍚 餐品</span></label>
-              <label class="choice"><input type="radio" name="itemType" value="drink"><span class="chip type-drink">🥤 饮品</span></label>
-            </div>
-          </div>
-          <fieldset class="meal-picker">
-            <legend class="field-label">适用于</legend>
-            <div class="meal-options">
-              <label class="choice"><input type="checkbox" name="meal" value="breakfast" checked><span class="chip meal-chip">早餐</span></label>
-              <label class="choice"><input type="checkbox" name="meal" value="lunch"><span class="chip meal-chip">午餐</span></label>
-              <label class="choice"><input type="checkbox" name="meal" value="dinner"><span class="chip meal-chip">晚餐</span></label>
-            </div>
-          </fieldset>
-          <button type="submit" class="btn primary">＋ 添加到清单</button>
-          <p class="error" id="formError" hidden></p>
-        </form>
-      </section>
-
-      <section class="panel list-panel">
-        <h2 id="listTitle">🌅 早餐清单</h2>
-        <ul id="itemList" class="item-list"></ul>
-        <div id="emptyState" class="empty" hidden>
-          <p>这个餐段还没有录入任何东西</p>
-          <button type="button" class="btn ghost" id="loadSample">加载示例数据试试</button>
-        </div>
-      </section>
+    <!-- ========== 推荐视图 ========== -->
+    <section id="viewRecommend" class="view">
+      <nav class="tabs">
+        <button type="button" class="tab active" data-meal="breakfast">🌅 早餐</button>
+        <button type="button" class="tab" data-meal="lunch">☀️ 午餐</button>
+        <button type="button" class="tab" data-meal="dinner">🌙 晚餐</button>
+      </nav>
+      <p class="pool-summary" id="poolSummary"></p>
 
       <section class="panel result-panel">
-        <h2>随机推荐</h2>
         <div class="mode-toggle" id="modeToggle">
           <button type="button" class="mode active" data-mode="combo">餐品 + 饮品</button>
           <button type="button" class="mode" data-mode="food">仅餐品</button>
@@ -72,18 +39,116 @@
         </div>
         <button type="button" class="btn roll" id="rollBtn">🎲 随机推荐</button>
         <div class="result" id="result">
-          <p class="placeholder">点击上方按钮，帮你拿主意</p>
+          <p class="placeholder">点击「随机推荐」，帮你拿主意</p>
         </div>
       </section>
-    </main>
+    </section>
 
-    <footer>
+    <!-- ========== 设置视图 ========== -->
+    <section id="viewSettings" class="view" hidden>
+      <nav class="tabs">
+        <button type="button" class="tab active" data-meal="breakfast">🌅 早餐</button>
+        <button type="button" class="tab" data-meal="lunch">☀️ 午餐</button>
+        <button type="button" class="tab" data-meal="dinner">🌙 晚餐</button>
+      </nav>
+
+      <div class="settings-layout">
+        <section class="panel form-panel">
+          <h2>录入餐品 / 饮品</h2>
+          <p class="panel-hint">单独的餐品或饮品，如牛肉面、豆浆</p>
+          <form id="addItemForm" novalidate>
+            <label class="field">
+              <span class="field-label">名称</span>
+              <input type="text" id="itemName" placeholder="如：肉夹馍" maxlength="30" autocomplete="off">
+            </label>
+            <label class="field">
+              <span class="field-label">价格（可留空）</span>
+              <input type="number" id="itemPrice" placeholder="¥" min="0" step="any" inputmode="decimal">
+            </label>
+            <div class="field">
+              <span class="field-label">类别</span>
+              <div class="type-toggle">
+                <label class="choice"><input type="radio" name="itemType" value="food" checked><span class="chip type-food">🍚 餐品</span></label>
+                <label class="choice"><input type="radio" name="itemType" value="drink"><span class="chip type-drink">🥤 饮品</span></label>
+              </div>
+            </div>
+            <fieldset class="meal-picker">
+              <legend class="field-label">适用于</legend>
+              <div class="meal-options">
+                <label class="choice"><input type="checkbox" name="meal" value="breakfast" checked><span class="chip meal-chip">早餐</span></label>
+                <label class="choice"><input type="checkbox" name="meal" value="lunch"><span class="chip meal-chip">午餐</span></label>
+                <label class="choice"><input type="checkbox" name="meal" value="dinner"><span class="chip meal-chip">晚餐</span></label>
+              </div>
+            </fieldset>
+            <button type="submit" class="btn primary">＋ 添加到清单</button>
+            <p class="error" id="formError" hidden></p>
+          </form>
+        </section>
+
+        <section class="panel list-panel">
+          <h2 id="listTitle">🌅 早餐清单</h2>
+          <ul id="itemList" class="item-list"></ul>
+          <div id="emptyState" class="empty" hidden>
+            <p>这个餐段还没有录入餐品 / 饮品</p>
+            <button type="button" class="btn ghost" id="loadSample">加载示例数据试试</button>
+          </div>
+        </section>
+
+        <section class="panel window-form-panel">
+          <h2>录入拼菜窗口</h2>
+          <p class="panel-hint">自选窗口录成一个「窗口」，随机时从里面拼出双拼 / 三拼</p>
+          <form id="addWindowForm" novalidate>
+            <label class="field">
+              <span class="field-label">窗口名称</span>
+              <input type="text" id="windowName" placeholder="如：自选快餐窗口" maxlength="30" autocomplete="off">
+            </label>
+            <fieldset class="meal-picker">
+              <legend class="field-label">适用于</legend>
+              <div class="meal-options">
+                <label class="choice"><input type="checkbox" name="wmeal" value="breakfast" checked><span class="chip meal-chip">早餐</span></label>
+                <label class="choice"><input type="checkbox" name="wmeal" value="lunch"><span class="chip meal-chip">午餐</span></label>
+                <label class="choice"><input type="checkbox" name="wmeal" value="dinner"><span class="chip meal-chip">晚餐</span></label>
+              </div>
+            </fieldset>
+            <div class="field">
+              <span class="field-label">拼法（可多选）</span>
+              <div class="pick-options">
+                <label class="choice"><input type="checkbox" name="pickK" value="2"><span class="chip pick-chip">双拼</span></label>
+                <label class="choice"><input type="checkbox" name="pickK" value="3"><span class="chip pick-chip">三拼</span></label>
+                <label class="choice"><input type="checkbox" name="pickK" value="4"><span class="chip pick-chip">四拼</span></label>
+              </div>
+            </div>
+            <div class="field">
+              <span class="field-label">一口价（可选，留空则按菜价合计）</span>
+              <div class="fixed-price-rows">
+                <div class="fixed-price-row" data-k="2" hidden><span>双拼 ¥</span><input type="number" min="0" step="any" inputmode="decimal" placeholder="如 12"></div>
+                <div class="fixed-price-row" data-k="3" hidden><span>三拼 ¥</span><input type="number" min="0" step="any" inputmode="decimal" placeholder="如 15"></div>
+                <div class="fixed-price-row" data-k="4" hidden><span>四拼 ¥</span><input type="number" min="0" step="any" inputmode="decimal" placeholder="如 18"></div>
+              </div>
+            </div>
+            <button type="submit" class="btn primary">＋ 创建窗口</button>
+            <p class="error" id="windowFormError" hidden></p>
+          </form>
+        </section>
+
+        <section class="panel window-list-panel">
+          <h2 id="windowListTitle">🥘 早餐拼菜窗口</h2>
+          <div id="windowList" class="window-list"></div>
+          <div id="windowEmpty" class="empty" hidden>
+            <p>这个餐段还没有拼菜窗口</p>
+          </div>
+        </section>
+      </div>
+
       <div class="data-actions">
         <button type="button" class="btn ghost small" id="exportBtn">导出数据</button>
         <button type="button" class="btn ghost small" id="importBtn">导入数据</button>
         <input type="file" id="importFile" accept="application/json,.json" hidden>
       </div>
-      <p>数据保存在当前浏览器本地（localStorage），不会上传 · v0.1 MVP</p>
+    </section>
+
+    <footer>
+      <p>数据保存在当前浏览器本地（localStorage），不会上传 · v0.2</p>
     </footer>
   </div>
 

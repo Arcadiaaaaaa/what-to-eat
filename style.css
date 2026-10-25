@@ -24,12 +24,21 @@ body {
   line-height: 1.6;
 }
 
-.container { max-width: 1060px; margin: 0 auto; padding: 36px 20px 56px; }
+.container { max-width: 1060px; margin: 0 auto; padding: 32px 20px 56px; }
 
-/* ---------- 头部 ---------- */
-header { text-align: center; margin-bottom: 10px; }
-h1 { margin: 0; font-size: 32px; font-weight: 800; letter-spacing: 1px; }
-.subtitle { margin: 8px 0 0; color: var(--ink-soft); font-size: 15px; }
+/* ---------- 头部与视图切换 ---------- */
+header { text-align: center; margin-bottom: 8px; }
+.header-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+h1 { margin: 0; font-size: 28px; font-weight: 800; letter-spacing: 1px; }
+.subtitle { margin: 6px 0 0; color: var(--ink-soft); font-size: 14px; }
+.view-nav { display: flex; gap: 8px; }
+.view-link {
+  text-decoration: none; padding: 8px 16px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--card); color: var(--ink-soft);
+  font-size: 14px; transition: all 0.18s ease;
+}
+.view-link:hover { color: var(--ink); transform: translateY(-1px); }
+.view-link.active { background: var(--ink); border-color: var(--ink); color: #fff; }
 
 /* ---------- 餐段切换 ---------- */
 .tabs { display: flex; justify-content: center; gap: 10px; margin: 22px 0; }
@@ -41,20 +50,48 @@ h1 { margin: 0; font-size: 32px; font-weight: 800; letter-spacing: 1px; }
 .tab:hover { transform: translateY(-1px); color: var(--ink); }
 .tab.active { background: var(--ink); border-color: var(--ink); color: #fff; box-shadow: var(--shadow); }
 
-/* ---------- 布局 ---------- */
-.layout {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  grid-template-areas: "form result" "list result";
-  gap: 20px;
-  align-items: start;
+/* ---------- 推荐视图 ---------- */
+.pool-summary { text-align: center; color: var(--ink-soft); font-size: 13px; margin: -6px 0 16px; }
+.result-panel { max-width: 680px; margin: 0 auto; }
+
+.mode-toggle {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;
+  background: #f6efe4; padding: 5px; border-radius: 12px;
 }
-.form-panel { grid-area: form; }
-.list-panel { grid-area: list; }
-.result-panel { grid-area: result; position: sticky; top: 20px; }
+.mode {
+  border: none; background: transparent; padding: 9px 4px; border-radius: 9px;
+  font-size: 14px; color: var(--ink-soft); cursor: pointer; font-family: inherit; transition: all 0.15s;
+}
+.mode.active { background: #fff; color: var(--ink); font-weight: 600; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08); }
+
+.result { min-height: 150px; }
+.result .placeholder { color: var(--ink-soft); text-align: center; margin: 34px 0 10px; font-size: 14px; }
+.result .btn.ghost { display: block; margin: 0 auto; }
+.result-card {
+  border: 1.5px dashed #f1c8a0; background: #fffaf3; border-radius: 12px;
+  padding: 16px; animation: pop 0.25s ease;
+}
+@keyframes pop { from { transform: scale(0.97); opacity: 0.5; } to { transform: scale(1); opacity: 1; } }
+.result-meal { font-size: 13px; color: var(--ink-soft); margin-bottom: 8px; }
+.result-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; font-size: 19px; flex-wrap: wrap; }
+.result-item .name { font-weight: 700; overflow-wrap: anywhere; }
+.result-item .name.rolling { color: #b08968; font-weight: 500; }
+.result-item .name-wrap { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.result-item .name-wrap .sub { font-size: 12.5px; color: var(--ink-soft); font-weight: 400; margin-top: 2px; }
+.result-item .price { margin-left: auto; color: var(--primary); font-weight: 600; font-size: 16px; flex: none; }
+.tag { font-size: 12px; padding: 2px 10px; border-radius: 999px; flex: none; }
+.tag.food { background: #ebfbee; color: var(--food); }
+.tag.drink { background: #e7f5ff; color: var(--drink); }
+.tag.window { background: #fff4e6; color: var(--primary); }
+.result-total { border-top: 1px dashed var(--line); margin-top: 8px; padding-top: 10px; text-align: right; font-weight: 700; }
+.result-total:empty { display: none; }
+.result-note { font-size: 12.5px; color: #b08968; margin-top: 8px; }
+
+/* ---------- 设置视图 ---------- */
+.settings-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
 @media (max-width: 860px) {
-  .layout { grid-template-columns: 1fr; grid-template-areas: "form" "list" "result"; }
-  .result-panel { position: static; }
+  .settings-layout { grid-template-columns: 1fr; }
+  .header-row { flex-direction: column; gap: 8px; }
 }
 
 .panel {
@@ -62,6 +99,7 @@ h1 { margin: 0; font-size: 32px; font-weight: 800; letter-spacing: 1px; }
   border-radius: var(--radius); padding: 20px 22px; box-shadow: var(--shadow);
 }
 .panel h2 { margin: 0 0 14px; font-size: 17px; }
+.panel-hint { font-size: 12.5px; color: var(--ink-soft); margin: -8px 0 14px; }
 
 /* ---------- 表单 ---------- */
 form { display: grid; gap: 14px; }
@@ -86,11 +124,17 @@ input[type="text"]:focus, input[type="number"]:focus {
 .choice input:focus-visible + .chip { outline: 2px solid #ffc078; }
 .choice input:checked + .chip.type-food { border-color: var(--food); color: var(--food); background: #ebfbee; font-weight: 600; }
 .choice input:checked + .chip.type-drink { border-color: var(--drink); color: var(--drink); background: #e7f5ff; font-weight: 600; }
-.choice input:checked + .chip.meal-chip { border-color: var(--primary); color: var(--primary); background: #fff4e6; font-weight: 600; }
+.choice input:checked + .chip.meal-chip,
+.choice input:checked + .chip.pick-chip { border-color: var(--primary); color: var(--primary); background: #fff4e6; font-weight: 600; }
 
 .type-toggle { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .meal-picker { border: none; padding: 0; margin: 0; display: grid; gap: 8px; }
 .meal-options { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.pick-options { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+
+.fixed-price-rows { display: grid; gap: 8px; }
+.fixed-price-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-soft); }
+.fixed-price-row input { width: 130px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 13.5px; font-family: inherit; background: #fffdf9; }
 
 .error { color: var(--danger); font-size: 13px; margin: 0; }
 
@@ -108,37 +152,8 @@ input[type="text"]:focus, input[type="number"]:focus {
 }
 .btn.roll:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 8px 20px rgba(232, 89, 12, 0.35); }
 .btn.roll:disabled { opacity: 0.6; cursor: wait; }
-
-/* ---------- 模式切换 ---------- */
-.mode-toggle {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;
-  background: #f6efe4; padding: 5px; border-radius: 12px;
-}
-.mode {
-  border: none; background: transparent; padding: 9px 4px; border-radius: 9px;
-  font-size: 14px; color: var(--ink-soft); cursor: pointer; font-family: inherit; transition: all 0.15s;
-}
-.mode.active { background: #fff; color: var(--ink); font-weight: 600; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08); }
-
-/* ---------- 推荐结果 ---------- */
-.result { min-height: 150px; }
-.result .placeholder { color: var(--ink-soft); text-align: center; margin: 44px 0; font-size: 14px; }
-.result-card {
-  border: 1.5px dashed #f1c8a0; background: #fffaf3; border-radius: 12px;
-  padding: 16px; animation: pop 0.25s ease;
-}
-@keyframes pop { from { transform: scale(0.97); opacity: 0.5; } to { transform: scale(1); opacity: 1; } }
-.result-meal { font-size: 13px; color: var(--ink-soft); margin-bottom: 8px; }
-.result-item { display: flex; align-items: baseline; gap: 10px; padding: 8px 0; font-size: 20px; }
-.result-item .name { font-weight: 700; }
-.result-item .name.rolling { color: #b08968; font-weight: 500; }
-.result-item .price { margin-left: auto; color: var(--primary); font-weight: 600; font-size: 16px; }
-.tag { font-size: 12px; padding: 2px 10px; border-radius: 999px; flex: none; align-self: center; }
-.tag.food { background: #ebfbee; color: var(--food); }
-.tag.drink { background: #e7f5ff; color: var(--drink); }
-.result-total { border-top: 1px dashed var(--line); margin-top: 8px; padding-top: 10px; text-align: right; font-weight: 700; }
-.result-total:empty { display: none; }
-.result-note { font-size: 12.5px; color: #b08968; margin-top: 8px; }
+.btn.dish-add { padding: 7px 14px; font-size: 13px; background: var(--primary); color: #fff; border-radius: 8px; flex: none; }
+.btn.dish-add:hover { background: var(--primary-deep); }
 
 /* ---------- 清单 ---------- */
 .item-list { list-style: none; margin: 0; padding: 0; }
@@ -169,9 +184,29 @@ input[type="text"]:focus, input[type="number"]:focus {
   border: 1.5px dashed var(--line); border-radius: 12px;
 }
 
+/* ---------- 拼菜窗口卡片 ---------- */
+.window-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; background: #fffdf9; }
+.wc-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.wc-name { font-weight: 700; }
+.wc-meta { font-size: 12px; color: #b08968; background: #faf0e0; border-radius: 6px; padding: 2px 8px; }
+.wc-head .del { margin-left: auto; }
+.wc-dishes { list-style: none; margin: 10px 0 0; padding: 0; }
+.wc-dishes li { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--line); font-size: 14px; }
+.wc-dishes li:last-child { border-bottom: none; }
+.wc-dishes .name { font-weight: 600; }
+.wc-dishes .price { margin-left: auto; color: var(--ink-soft); font-size: 13px; flex: none; }
+.wc-dishes .price.unknown { font-style: italic; }
+.wc-empty-dish { color: var(--ink-soft); font-size: 13px; font-style: italic; }
+.wc-add-dish { display: flex; gap: 8px; margin-top: 10px; }
+.wc-add-dish input {
+  flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid var(--line);
+  border-radius: 8px; font-size: 13.5px; font-family: inherit; background: #fff;
+}
+.wc-add-dish input[type="number"] { flex: 0 0 100px; }
+
 /* ---------- 页脚 / 提示 ---------- */
 footer { margin-top: 26px; text-align: center; color: var(--ink-soft); font-size: 12.5px; }
-.data-actions { display: flex; justify-content: center; gap: 10px; margin-bottom: 10px; }
+.data-actions { display: flex; justify-content: center; gap: 10px; margin: 22px 0 0; }
 
 .toast {
   position: fixed; left: 50%; bottom: 34px; transform: translateX(-50%);
