@@ -124,7 +124,8 @@ input[type="text"]:focus, input[type="number"]:focus {
 .choice input:checked + .chip.type-food { border-color: var(--food); color: var(--food); background: #ebfbee; font-weight: 600; }
 .choice input:checked + .chip.type-drink { border-color: var(--drink); color: var(--drink); background: #e7f5ff; font-weight: 600; }
 .choice input:checked + .chip.meal-chip,
-.choice input:checked + .chip.pick-chip { border-color: var(--primary); color: var(--primary); background: #fff4e6; font-weight: 600; }
+.choice input:checked + .chip.pick-chip,
+.choice input:checked + .chip.pf-chip { border-color: var(--primary); color: var(--primary); background: #fff4e6; font-weight: 600; }
 
 .type-toggle { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .meal-picker { border: none; padding: 0; margin: 0; display: grid; gap: 8px; }
@@ -154,6 +155,19 @@ input[type="text"]:focus, input[type="number"]:focus {
 }
 .btn.roll:hover:not(:disabled) { background: linear-gradient(135deg, #f76707, #d9480f); }
 .btn.roll:disabled { opacity: 0.6; cursor: wait; }
+
+/* ---------- 价格区间 ---------- */
+.price-filter { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.pf-toggle { flex: none; }
+.pf-toggle .chip { padding: 6px 14px; font-size: 13px; }
+.pf-inputs { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 200px; }
+.pf-inputs input {
+  width: 110px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+  font-size: 14px; font-family: inherit; background: #fffdf9;
+}
+.pf-inputs input:focus { outline: 2px solid #ffd8a8; border-color: #ffc078; }
+.pf-dash { color: var(--ink-soft); }
+.pf-hint { flex-basis: 100%; margin: 0; font-size: 11.5px; color: var(--ink-soft); }
 .btn.dish-add { padding: 7px 14px; font-size: 13px; background: var(--primary); color: #fff; border-radius: 8px; flex: none; }
 .btn.dish-add:hover { background: var(--primary-deep); }
 

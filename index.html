@@ -37,6 +37,15 @@
           <button type="button" class="mode" data-mode="food">仅餐品</button>
           <button type="button" class="mode" data-mode="drink">仅饮品</button>
         </div>
+        <div class="price-filter">
+          <label class="choice pf-toggle"><input type="checkbox" id="pfEnabled"><span class="chip pf-chip">💰 限定价格</span></label>
+          <div class="pf-inputs" id="pfInputs" hidden>
+            <input type="number" id="pfMin" placeholder="最低 ¥" min="0" step="any" inputmode="decimal">
+            <span class="pf-dash">—</span>
+            <input type="number" id="pfMax" placeholder="最高 ¥" min="0" step="any" inputmode="decimal">
+          </div>
+          <p class="pf-hint">开启后按结果价格过滤（组合模式按餐品 + 饮品合计）；未标价的条目不参与</p>
+        </div>
         <button type="button" class="btn roll" id="rollBtn">🎲 随机推荐</button>
         <div class="result" id="result">
           <p class="placeholder">点击「随机推荐」，帮你拿主意</p>
@@ -188,7 +197,7 @@
     </section>
 
     <footer>
-      <p>数据保存在当前浏览器本地（localStorage），不会上传 · v0.3</p>
+      <p>数据保存在当前浏览器本地（localStorage），不会上传 · v0.4</p>
     </footer>
   </div>
 
