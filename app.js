@@ -40,11 +40,14 @@
     },
   ];
 
-  const state = { items: [], windows: [] };
+  const state = { items: [], windows: [], history: [] };
   let currentMeal = 'breakfast';
   let currentMode = 'combo';
-  let last = {}; // 会话内上轮指针，键 "meal:slot"（软防连抽用，不持久化）
-  let currentResult = null; // 当前展示结果（会话内，用于反馈与撤销）
+  let last = {}; // 上轮指针，键 "meal:slot"（软防连抽用；随历史一起持久化以支持跨会话续用）
+  let currentResult = null; // 当前结果（模块形态，实体级反馈/撤销用）
+  let currentRecord = null; // 当前结果（持久化记录形态，微调/菜品反馈用）
+  let dishReceipts = {}; // 会话内菜品反馈撤销凭据，键 `${recordId}:${dishId}`
+  let pendingSwap = null; // 待执行的微调目标 { slot, dishIndex? }
   let rolling = false;
   let editing = null; // { kind: 'item' | 'window', id } 表单编辑模式
   let editingDishId = null; // 正在行内编辑的菜品
@@ -91,6 +94,7 @@
     id: typeof d.id === 'string' && d.id ? d.id : uid(),
     name: d.name.trim().slice(0, 40),
     price: typeof d.price === 'number' && d.price >= 0 ? Math.round(d.price * 100) / 100 : null,
+    preference: MealRandom.readPreference(d),
   });
 
   function isValidWindow(o) {
@@ -129,13 +133,25 @@
       const data = JSON.parse(raw);
       if (Array.isArray(data.items)) state.items = data.items.filter(isValidItem).map(sanitizeItem);
       if (Array.isArray(data.windows)) state.windows = data.windows.filter(isValidWindow).map(sanitizeWindow);
+      if (Array.isArray(data.history)) {
+        state.history = data.history
+          .filter((r) => r && typeof r === 'object' && (r.food || r.drink))
+          .slice(0, 30);
+      }
+      if (data.last && typeof data.last === 'object') last = data.last;
     } catch (err) {
       console.warn('本地数据读取失败，已忽略：', err);
     }
   }
 
   function save() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 2, items: state.items, windows: state.windows }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      version: 2,
+      items: state.items,
+      windows: state.windows,
+      history: state.history.slice(0, 30),
+      last,
+    }));
   }
 
   // ---------- 导入容错归一化（AI 输出 / 手输均可） ----------
@@ -223,17 +239,25 @@
   }
 
   // ---------- 随机候选池（模块负责：忌口剔除、每窗口一个候选名额） ----------
-  const validKs = (w) => w.pickOptions.filter((k) => K_LABEL[k] && k <= w.dishes.length);
+  const eligibleDishes = (w) => w.dishes.filter((d) => !MealRandom.readPreference(d).blocked);
+  const validKs = (w) => {
+    const n = eligibleDishes(w).length;
+    return w.pickOptions.filter((k) => K_LABEL[k] && k <= n);
+  };
+
+  // 模块按全部菜品判断拼法可行性，这里再按"未忌口菜品数"收紧
+  const candidatesFor = (meal, slot) => MealRandom.candidates(state, meal, slot)
+    .filter((c) => c.kind !== 'window' || validKs(c.entity).length > 0);
 
   function foodCandidates(meal) {
-    const pool = MealRandom.candidates(state, meal, 'food');
+    const pool = candidatesFor(meal, 'food');
     return {
       singles: pool.filter((c) => c.kind === 'item').map((c) => c.entity),
       windows: pool.filter((c) => c.kind === 'window').map((c) => c.entity),
     };
   }
 
-  const drinksForMeal = (meal) => MealRandom.candidates(state, meal, 'drink').map((c) => c.entity);
+  const drinksForMeal = (meal) => candidatesFor(meal, 'drink').map((c) => c.entity);
 
   // 累计概率抽样（模块未导出内部 draw，此处等价实现）
   const drawRow = (rows) => {
@@ -245,6 +269,19 @@
     }
     return rows[rows.length - 1];
   };
+
+  // 窗口内按菜品偏好权重不放回抽 K 道菜（偏好机制与实体级一致）
+  function weightedDishes(w, k) {
+    const pool = eligibleDishes(w).map((d) => ({ kind: 'dish', key: `dish:${d.id}`, entity: d }));
+    const picked = [];
+    while (picked.length < k && pool.length) {
+      const rows = MealRandom.distribution(pool, {});
+      const chosen = drawRow(rows);
+      picked.push(chosen.entity);
+      pool.splice(pool.findIndex((c) => c.key === chosen.key), 1);
+    }
+    return picked;
+  }
 
   const blockedCountFor = (meal) =>
     state.items.filter((i) => i.meals.includes(meal) && MealRandom.readPreference(i).blocked).length
@@ -295,7 +332,7 @@
       c.checked = c.value === meal;
     });
     renderAll();
-    setResultPlaceholder();
+    if (!currentRecord) setResultPlaceholder();
   }
 
   // ---------- 渲染 ----------
@@ -308,6 +345,7 @@
     renderWindowList();
     renderPoolSummary();
     renderPrefPanel();
+    renderHistory();
     refreshResultIfEmpty();
   }
 
@@ -421,6 +459,8 @@
         d.price == null ? 'price unknown' : 'price',
         d.price == null ? '未标价' : `¥${fmt(d.price)}`
       ));
+      const dflag = entityFlag(d);
+      if (dflag) li.appendChild(dflag);
       const dedit = el('button', 'edit dedit', '编辑');
       dedit.type = 'button';
       dedit.dataset.wid = w.id;
@@ -533,8 +573,9 @@
   function windowPriceRange(w, k) {
     const fixed = w.fixedPrices && w.fixedPrices[k];
     if (typeof fixed === 'number') return [fixed, fixed];
-    if (w.dishes.some((d) => d.price == null)) return null;
-    const ps = w.dishes.map((d) => d.price).sort((a, b) => a - b);
+    const dishes = eligibleDishes(w);
+    if (dishes.some((d) => d.price == null)) return null;
+    const ps = dishes.map((d) => d.price).sort((a, b) => a - b);
     let lo = 0;
     let hi = 0;
     for (let i = 0; i < k; i += 1) {
@@ -615,10 +656,11 @@
         });
       }
       const k = ks[Math.floor(Math.random() * ks.length)];
-      const dishes = MealRandom.sampleDishes(e.dishes, k);
+      const dishes = weightedDishes(e, k);
       return {
         kind: 'window', entity: e, name: dishes.map((d) => d.name).join(' + '), sub: e.name,
         price: windowPrice(e, k, dishes), tag: K_LABEL[k], tagClass: 'window',
+        k, dishes,
       };
     };
 
@@ -658,17 +700,36 @@
       return;
     }
 
-    // 会话内状态：模块结果（供反馈/撤销）与上轮指针（meal:slot 作用域）
-    const moduleResult = { food: null, drink: null, votes: {} };
+    // 写入历史（含上轮指针），页面刷新后可恢复继续微调/反馈
+    const record = {
+      id: uid(), ts: Date.now(), meal: currentMeal, mode: currentMode, adjusted: false,
+      note: slotsWanted.filter((s) => emptyNotes[s]).map((s) => emptyNotes[s]).join('，') || null,
+      votes: { dishes: {} },
+      food: null, drink: null,
+    };
     for (const slot of slotsWanted) {
-      if (drawn[slot]) {
-        moduleResult[slot] = { entity: drawn[slot].entity, price: drawn[slot].price };
-        last[`${currentMeal}:${slot}`] = drawn[slot].meta.key;
+      if (!drawn[slot]) continue;
+      last[`${currentMeal}:${slot}`] = drawn[slot].meta.key;
+      if (drawn[slot].kind === 'window') {
+        record.food = {
+          kind: 'window', entityId: drawn[slot].entity.id, name: drawn[slot].entity.name,
+          k: drawn[slot].k, tag: drawn[slot].tag,
+          dishes: drawn[slot].dishes.map((d) => ({ id: d.id, name: d.name, price: d.price })),
+          price: drawn[slot].price, meta: drawn[slot].meta,
+        };
+      } else {
+        record[slot] = {
+          kind: 'item', entityId: drawn[slot].entity.id, name: drawn[slot].name,
+          price: drawn[slot].price, meta: drawn[slot].meta,
+        };
       }
     }
-    currentResult = moduleResult;
+    state.history.unshift(record);
+    state.history = state.history.slice(0, 30);
+    save();
+    renderHistory();
 
-    const slots = ['food', 'drink'].filter((s) => drawn[s]).map((s) => drawn[s]);
+    // 滚动动画：先出骨架，落定后渲染可微调的结果卡片
     const animateFor = (slot) => {
       const rows = dists[slot] || [];
       return () => {
@@ -676,9 +737,10 @@
         if (c.kind === 'item') return c.entity.name;
         const ks2 = validKs(c.entity);
         const k2 = ks2[Math.floor(Math.random() * ks2.length)];
-        return MealRandom.sampleDishes(c.entity.dishes, k2).map((d) => d.name).join(' + ');
+        return MealRandom.sampleDishes(eligibleDishes(c.entity), k2).map((d) => d.name).join(' + ');
       };
     };
+    const slots = ['food', 'drink'].filter((s) => drawn[s]);
 
     const meal = MEALS[currentMeal];
     const result = $('#result');
@@ -686,55 +748,33 @@
     result.dataset.empty = '0';
     const card = el('div', 'result-card');
     card.appendChild(el('div', 'result-meal', `${meal.icon} ${meal.label} · ${MODE_LABEL[currentMode]}`));
-
     const wrap = el('div', 'result-items');
-    const rowEls = [];
+    const nameEls = [];
     slots.forEach((s) => {
       const row = el('div', 'result-item');
-      row.appendChild(el('span', `tag ${s.tagClass}`, s.tag));
-      const nameWrap = el('span', 'name-wrap');
-      s.nameEl = el('span', 'name rolling', '······');
-      nameWrap.appendChild(s.nameEl);
-      row.appendChild(nameWrap);
+      row.appendChild(el('span', `tag ${drawn[s].tagClass}`, drawn[s].tag));
+      const nameEl = el('span', 'name rolling', '······');
+      row.appendChild(nameEl);
       wrap.appendChild(row);
-      rowEls.push(row);
+      nameEls.push(nameEl);
     });
     card.appendChild(wrap);
-
-    const totalEl = el('div', 'result-total', '');
-    card.appendChild(totalEl);
-    const partialNotes = slotsWanted.filter((s) => emptyNotes[s]).map((s) => emptyNotes[s]);
-    if (partialNotes.length) card.appendChild(el('div', 'result-note', partialNotes.join('，')));
     result.appendChild(card);
 
     rolling = true;
     const rollBtn = $('#rollBtn');
     rollBtn.disabled = true;
 
-    // 名字快速轮换后落定
     const startedAt = Date.now();
     const timer = setInterval(() => {
       if (Date.now() - startedAt >= 700) {
         clearInterval(timer);
-        slots.forEach((s, idx) => {
-          s.nameEl.textContent = s.name;
-          s.nameEl.classList.remove('rolling');
-          if (s.sub) s.nameEl.after(el('span', 'sub', s.sub));
-          rowEls[idx].appendChild(el('span', 'price', s.price == null ? '价格未知' : `¥${fmt(s.price)}`));
-          rowEls[idx].appendChild(buildFbGroup(s.slot, s.meta));
-        });
-        if (slots.length > 1) {
-          const priced = slots.filter((s) => s.price != null);
-          const sum = priced.reduce((acc, s) => acc + s.price, 0);
-          totalEl.textContent = priced.length < slots.length
-            ? `合计 ¥${fmt(sum)}（含未标价项）`
-            : `合计 ¥${fmt(sum)}`;
-        }
+        renderResultCard(record, false);
         rolling = false;
         rollBtn.disabled = false;
         return;
       }
-      slots.forEach((s) => { s.nameEl.textContent = animateFor(s.slot)(); });
+      slots.forEach((s, idx) => { nameEls[idx].textContent = animateFor(s)(); });
     }, 70);
   }
 
@@ -750,7 +790,7 @@
     return null;
   }
 
-  const metaText = (m) => `权重 ×${m.weight.toFixed(2)} · 概率 ${(m.probability * 100).toFixed(1)}%`;
+  const metaText = (m) => (m ? `权重 ×${m.weight.toFixed(2)} · 概率 ${(m.probability * 100).toFixed(1)}%` : '手动调整');
 
   function buildFbGroup(slot, meta) {
     const wrap = el('span', 'fb');
@@ -776,11 +816,12 @@
 
   function updateFbUI(slot) {
     const group = document.querySelector(`.fb[data-slot="${slot}"]`);
-    if (!group || !currentResult || !currentResult[slot]) return;
-    const voted = currentResult.votes[slot];
+    if (!group || !currentRecord || !currentRecord[slot]) return;
+    const voted = currentRecord.votes[slot];
+    const hasReceipt = !!(currentResult && currentResult.votes[slot]);
     group.querySelectorAll('.fb-btn').forEach((b) => {
       if (b.dataset.undo) {
-        b.hidden = !voted;
+        b.hidden = !(voted && hasReceipt);
         return;
       }
       b.classList.toggle('active', !!voted && b.dataset.vote === voted.action);
@@ -790,31 +831,253 @@
       stateEl.textContent = group.dataset.meta;
       return;
     }
-    const entity = currentResult[slot].entity;
+    const entity = currentResult && currentResult[slot] ? currentResult[slot].entity : liveEntity(currentRecord[slot].entityId);
     stateEl.textContent = voted.action === 'block'
       ? '已忌口 🚫'
-      : `${voted.action === 'like' ? '👍' : '👎'} 权重 ×${MealRandom.weight(entity).toFixed(2)}`;
+      : `${voted.action === 'like' ? '👍' : '👎'} 权重 ×${entity ? MealRandom.weight(entity).toFixed(2) : '?'}`;
+  }
+
+  const liveEntity = (id) => {
+    const item = state.items.find((x) => x.id === id);
+    if (item) return item;
+    const win = state.windows.find((x) => x.id === id);
+    if (win) return win;
+    for (const w of state.windows) {
+      const d = w.dishes.find((x) => x.id === id);
+      if (d) return d;
+    }
+    return null;
+  };
+
+  function recordComboText(record) {
+    const parts = [];
+    if (record.food) {
+      parts.push(record.food.kind === 'window'
+        ? record.food.dishes.map((d) => d.name).join('+')
+        : record.food.name);
+    }
+    if (record.drink) parts.push(record.drink.name);
+    return parts.join(' ＋ ');
+  }
+
+  const voteMark = (a) => (a === 'like' ? '👍' : a === 'dislike' ? '👎' : a === 'block' ? '🚫' : '');
+
+  function renderHistory() {
+    const box = $('#historyBox');
+    const list = $('#historyList');
+    if (!box || !list) return;
+    list.textContent = '';
+    const rest = state.history.slice(1);
+    box.hidden = rest.length === 0;
+    rest.slice(0, 12).forEach((r) => {
+      const marks = [
+        r.votes.food && voteMark(r.votes.food.action),
+        r.votes.drink && voteMark(r.votes.drink.action),
+        ...Object.values(r.votes.dishes || {}).map((v) => voteMark(v.action)),
+      ].filter(Boolean).join('');
+      const t = new Date(r.ts);
+      const li = el('li');
+      li.appendChild(el('span', 'h-time',
+        `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`));
+      li.appendChild(el('span', 'h-meal', MEALS[r.meal] ? MEALS[r.meal].label : '?'));
+      li.appendChild(el('span', 'h-combo', recordComboText(r) + (r.adjusted ? ' ✎' : '')));
+      if (marks) li.appendChild(el('span', 'h-marks', marks));
+      list.appendChild(li);
+    });
+  }
+
+  // 渲染可微调的结果卡片（roll 落定、刷新恢复、微调后重渲共用）
+  function renderResultCard(record, keepVotes) {
+    currentRecord = record;
+    const preserved = keepVotes && currentResult ? currentResult.votes : {};
+    currentResult = { food: null, drink: null, votes: preserved };
+    const result = $('#result');
+    result.textContent = '';
+    result.dataset.empty = '0';
+    const card = el('div', 'result-card');
+    const meal = MEALS[record.meal] || MEALS[currentMeal];
+    card.appendChild(el('div', 'result-meal',
+      `${meal.icon} ${meal.label} · ${MODE_LABEL[record.mode] || ''}${record.adjusted ? ' · 已微调 ✎' : ''}`));
+
+    const renderSlot = (slot) => {
+      const rec = record[slot];
+      if (!rec) return;
+      const row = el('div', 'result-item');
+      if (slot === 'food' && rec.kind === 'window') {
+        row.appendChild(el('span', 'tag window', rec.tag));
+        const nameWrap = el('span', 'name-wrap');
+        const chips = el('span', 'dish-chips');
+        rec.dishes.forEach((d, idx) => {
+          const chip = el('span', 'dish-chip');
+          chip.appendChild(el('span', 'dish-name', d.name));
+          const sw = el('button', 'chip-btn', '⇄');
+          sw.type = 'button';
+          sw.title = '换这道菜';
+          sw.dataset.swapDish = '1';
+          sw.dataset.index = idx;
+          chip.appendChild(sw);
+          [['like', '👍', '这道菜好吃'], ['dislike', '👎', '这道菜不好吃']].forEach(([act, icon, title]) => {
+            const b = el('button', `chip-btn dv-${act}`, icon);
+            b.type = 'button';
+            b.title = title;
+            b.dataset.dishAct = act;
+            b.dataset.dishId = d.id;
+            chip.appendChild(b);
+          });
+          const voted = (record.votes.dishes || {})[d.id];
+          if (voted) {
+            chip.classList.add('voted');
+            const btn = chip.querySelector(voted.action === 'like' ? '.dv-like' : '.dv-dislike');
+            if (btn) btn.classList.add('active');
+            if (dishReceipts[`${record.id}:${d.id}`]) {
+              const undo = el('button', 'chip-btn', '↩');
+              undo.type = 'button';
+              undo.title = '撤销';
+              undo.dataset.dishUndo = d.id;
+              chip.appendChild(undo);
+            }
+          }
+          chips.appendChild(chip);
+        });
+        nameWrap.appendChild(chips);
+        nameWrap.appendChild(el('span', 'sub', `${rec.name} · ${metaText(rec.meta)}`));
+        row.appendChild(nameWrap);
+      } else {
+        row.appendChild(el('span', `tag ${slot === 'food' ? 'food' : 'drink'}`,
+          slot === 'food' ? TYPE_LABEL.food : TYPE_LABEL.drink));
+        const nameWrap = el('span', 'name-wrap');
+        nameWrap.appendChild(el('span', 'name', rec.name));
+        nameWrap.appendChild(el('span', 'sub', metaText(rec.meta)));
+        row.appendChild(nameWrap);
+        const sw = el('button', 'chip-btn swap-slot-btn', '⇄ 换');
+        sw.type = 'button';
+        sw.title = '换一个';
+        sw.dataset.swapSlot = slot;
+        row.appendChild(sw);
+      }
+      row.appendChild(el('span', 'price', rec.price == null ? '价格未知' : `¥${fmt(rec.price)}`));
+      const entity = liveEntity(rec.entityId);
+      if (entity) {
+        currentResult[slot] = { entity, price: rec.price };
+        row.appendChild(buildFbGroup(slot, rec.meta));
+      }
+      card.appendChild(row);
+      const menu = el('div', 'swap-menu');
+      menu.dataset.forSlot = slot;
+      menu.hidden = true;
+      card.appendChild(menu);
+    };
+    renderSlot('food');
+    renderSlot('drink');
+
+    const picks = ['food', 'drink'].map((s) => record[s]).filter(Boolean);
+    if (picks.length > 1) {
+      const priced = picks.filter((p) => p.price != null);
+      const sum = priced.reduce((a, p) => a + p.price, 0);
+      card.appendChild(el('div', 'result-total',
+        priced.length < picks.length ? `合计 ¥${fmt(sum)}（含未标价项）` : `合计 ¥${fmt(sum)}`));
+    }
+    if (record.note) card.appendChild(el('div', 'result-note', record.note));
+    result.appendChild(card);
+    ['food', 'drink'].forEach((s) => { if (record.votes[s]) updateFbUI(s); });
+  }
+
+  function openSwapMenu(slot) {
+    const menu = document.querySelector(`#result .swap-menu[data-for-slot="${slot}"]`);
+    if (!menu || !currentRecord || !currentRecord[slot]) return;
+    const wasOpen = !menu.hidden;
+    document.querySelectorAll('#result .swap-menu').forEach((m) => { m.hidden = true; m.textContent = ''; });
+    if (wasOpen) return;
+    const rec = currentRecord[slot];
+    let options = [];
+    if (slot === 'food' && rec.kind === 'window') {
+      const win = liveEntity(rec.entityId);
+      const inCombo = new Set(rec.dishes.map((d) => d.id));
+      options = win ? eligibleDishes(win).filter((d) => !inCombo.has(d.id))
+        .map((d) => ({ kind: 'dish', id: d.id, label: `${d.name}${d.price != null ? ` ¥${fmt(d.price)}` : ''}` })) : [];
+    } else if (slot === 'drink') {
+      options = candidatesFor(currentRecord.meal, 'drink')
+        .filter((c) => c.entity.id !== rec.entityId)
+        .map((c) => ({ kind: 'entity', id: c.entity.id, label: `${c.entity.name}${c.entity.price != null ? ` ¥${fmt(c.entity.price)}` : ''}` }));
+    } else {
+      options = candidatesFor(currentRecord.meal, 'food')
+        .filter((c) => c.kind === 'item' && c.entity.id !== rec.entityId)
+        .map((c) => ({ kind: 'entity', id: c.entity.id, label: `${c.entity.name}${c.entity.price != null ? ` ¥${fmt(c.entity.price)}` : ''}` }));
+    }
+    if (!options.length) {
+      toast(slot === 'food' && rec.kind === 'window' ? '窗口里没有别的菜可换，去设置添加' : '没有可换的选项，去设置添加');
+      return;
+    }
+    options.slice(0, 8).forEach((opt) => {
+      const b = el('button', 'swap-opt', opt.label);
+      b.type = 'button';
+      b.dataset.optKind = opt.kind;
+      b.dataset.optId = opt.id;
+      menu.appendChild(b);
+    });
+    menu.hidden = false;
+  }
+
+  function doSwap(optKind, optId) {
+    const record = currentRecord;
+    if (!record || !pendingSwap) return;
+    const slot = pendingSwap.slot;
+    const rec = record[slot];
+    if (!rec) return;
+    if (optKind === 'dish' && slot === 'food' && rec.kind === 'window') {
+      const idx = pendingSwap.dishIndex;
+      const old = rec.dishes[idx];
+      const win = liveEntity(rec.entityId);
+      const dish = win && eligibleDishes(win).find((d) => d.id === optId);
+      if (!dish || old == null) return;
+      rec.dishes[idx] = { id: dish.id, name: dish.name, price: dish.price };
+      if (record.votes.dishes && record.votes.dishes[old.id]) delete record.votes.dishes[old.id];
+      const fixed = win && win.fixedPrices && win.fixedPrices[rec.k];
+      if (typeof fixed !== 'number') {
+        rec.price = rec.dishes.some((d) => d.price == null)
+          ? null
+          : Math.round(rec.dishes.reduce((a, d) => a + d.price, 0) * 100) / 100;
+      }
+      record.adjusted = true;
+      save();
+      renderResultCard(record, true);
+      renderAll();
+      toast(`已换成「${dish.name}」`);
+      return;
+    }
+    if (optKind === 'entity') {
+      const entity = liveEntity(optId);
+      if (!entity) return;
+      record[slot] = { kind: 'item', entityId: entity.id, name: entity.name, price: entity.price, meta: null };
+      if (record.votes[slot]) delete record.votes[slot];
+      record.adjusted = true;
+      save();
+      renderResultCard(record, true);
+      renderAll();
+      toast(`已换成「${entity.name}」`);
+    }
   }
 
   function renderPrefPanel() {
     const list = $('#prefList');
     list.textContent = '';
     const affected = [
-      ...state.items.map((x) => ({ x, kind: TYPE_LABEL[x.type] })),
-      ...state.windows.map((x) => ({ x, kind: '窗口' })),
+      ...state.items.map((x) => ({ x, kind: TYPE_LABEL[x.type], via: null })),
+      ...state.windows.map((x) => ({ x, kind: '窗口', via: null })),
+      ...state.windows.flatMap((w) => w.dishes.map((d) => ({ x: d, kind: '菜品', via: w.name }))),
     ].filter(({ x }) => {
       const p = MealRandom.readPreference(x);
       return p.blocked || p.updatedAt != null || p.weight !== 1;
     });
     $('#prefEmpty').hidden = affected.length > 0;
-    affected.forEach(({ x, kind }) => {
+    affected.forEach(({ x, kind, via }) => {
       const p = MealRandom.readPreference(x);
       const w = MealRandom.weight(x);
       const stateText = p.blocked
         ? '已忌口 🚫'
         : (w > 0.99 && w < 1.01 ? `已随时间恢复中性（记录 ×${p.weight.toFixed(2)}）` : `反馈 ×${p.weight.toFixed(2)} · 当前 ×${w.toFixed(2)}`);
       const li = el('li');
-      li.appendChild(el('span', 'name', x.name));
+      li.appendChild(el('span', 'name', via ? `${via} · ${x.name}` : x.name));
       li.appendChild(el('span', 'kind', kind));
       li.appendChild(el('span', 'state', stateText));
       const btn = el('button', 'btn ghost small', '恢复默认');
@@ -1202,33 +1465,97 @@
     $('#pfMin').addEventListener('input', renderPoolSummary);
     $('#pfMax').addEventListener('input', renderPoolSummary);
 
-    // 结果反馈：每槽一票，改选先撤销（模块强制）
+    // 结果卡片：实体反馈 / 菜品反馈 / 微调换菜换饮品
     $('#result').addEventListener('click', (e) => {
+      // 实体反馈撤销
       const undoBtn = e.target.closest('.fb-btn[data-undo]');
       if (undoBtn) {
         const slot = undoBtn.dataset.undo;
-        if (MealRandom.undoVote(currentResult, slot)) {
+        if (currentResult && currentResult.votes[slot] && MealRandom.undoVote(currentResult, slot)) {
+          if (currentRecord) delete currentRecord.votes[slot];
           save();
           toast('已撤销该条反馈');
           updateFbUI(slot);
           renderAll();
+        } else if (currentRecord && currentRecord.votes[slot]) {
+          toast('这条反馈是之前页面记录的，无法撤销；可在设置-偏好与忌口恢复默认');
         } else {
           toast('该反馈已被后续操作覆盖，无法撤销');
-          updateFbUI(slot);
         }
         return;
       }
+      // 菜品反馈撤销
+      const dishUndoBtn = e.target.closest('.chip-btn[data-dish-undo]');
+      if (dishUndoBtn && currentRecord) {
+        const key = `${currentRecord.id}:${dishUndoBtn.dataset.dishUndo}`;
+        if (dishReceipts[key] && MealRandom.undoFeedback(dishReceipts[key])) {
+          delete currentRecord.votes.dishes[dishUndoBtn.dataset.dishUndo];
+          delete dishReceipts[key];
+          save();
+          renderResultCard(currentRecord, true);
+          renderAll();
+          toast('已撤销该菜反馈');
+        } else {
+          toast('无法撤销（已过期或被后续操作覆盖）');
+        }
+        return;
+      }
+      // 菜品反馈（每条记录每道菜一次）
+      const dishBtn = e.target.closest('.chip-btn[data-dish-act]');
+      if (dishBtn && currentRecord) {
+        const dishId = dishBtn.dataset.dishId;
+        const action = dishBtn.dataset.dishAct;
+        if (currentRecord.votes.dishes[dishId]) {
+          toast('这道菜已反馈过（本条记录），刷新前的记录不可撤销');
+          return;
+        }
+        const dish = liveEntity(dishId);
+        if (!dish) { toast('该菜品已被删除'); return; }
+        try {
+          dishReceipts[`${currentRecord.id}:${dishId}`] = MealRandom.applyFeedback(dish, action);
+          currentRecord.votes.dishes[dishId] = { action };
+          save();
+          renderResultCard(currentRecord, true);
+          renderAll();
+          toast(`${action === 'like' ? '已记录：以后多给' : '已记录：以后少给'}「${dish.name}」`);
+        } catch (err) {
+          toast(String(err.message || err));
+        }
+        return;
+      }
+      // 打开换菜菜单
+      const swapDishBtn = e.target.closest('.chip-btn[data-swap-dish]');
+      if (swapDishBtn) {
+        pendingSwap = { slot: 'food', dishIndex: Number(swapDishBtn.dataset.index) };
+        openSwapMenu('food');
+        return;
+      }
+      // 打开换饮品 / 换单点菜单
+      const swapSlotBtn = e.target.closest('.chip-btn[data-swap-slot]');
+      if (swapSlotBtn) {
+        pendingSwap = { slot: swapSlotBtn.dataset.swapSlot };
+        openSwapMenu(swapSlotBtn.dataset.swapSlot);
+        return;
+      }
+      // 选中替换项
+      const optBtn = e.target.closest('.swap-opt');
+      if (optBtn && currentRecord) {
+        doSwap(optBtn.dataset.optKind, optBtn.dataset.optId);
+        return;
+      }
+      // 实体反馈（每条记录每槽一次，改选先撤销）
       const voteBtn = e.target.closest('.fb-btn[data-vote]');
-      if (!voteBtn || !currentResult) return;
+      if (!voteBtn || !currentResult || !currentRecord) return;
       const slot = voteBtn.dataset.slot;
       const action = voteBtn.dataset.vote;
-      if (currentResult.votes[slot]) {
+      if ((currentResult.votes && currentResult.votes[slot]) || currentRecord.votes[slot]) {
         toast('本条结果已反馈过，先点撤销可改选');
         return;
       }
       try {
         if (MealRandom.vote(currentResult, slot, action)) {
-          currentResult.votes[slot].action = action; // 供 UI 高亮
+          currentResult.votes[slot].action = action;
+          currentRecord.votes[slot] = { action };
           save();
           const entity = currentResult[slot].entity;
           const msgs = {
@@ -1397,4 +1724,6 @@
   bindEvents();
   applyView();
   switchMeal('breakfast');
+  if (state.history.length) renderResultCard(state.history[0], false);
+  else setResultPlaceholder();
 })();

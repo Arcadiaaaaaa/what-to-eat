@@ -191,6 +191,43 @@ input[type="text"]:focus, input[type="number"]:focus {
 .fb-btn.active { background: #fff4e6; color: var(--primary); font-weight: 600; }
 .fb-btn.undo { font-size: 12px; }
 .fb-state { font-size: 11.5px; color: #b08968; white-space: nowrap; }
+
+/* ---------- 结果微调（换菜 / 菜品反馈） ---------- */
+.dish-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.dish-chip {
+  display: inline-flex; align-items: center; gap: 1px;
+  background: #fff; border: 1px solid var(--line); border-radius: 8px;
+  padding: 1px 3px 1px 9px; font-size: 15px; font-weight: 700;
+}
+.dish-chip.voted { border-color: #ffc078; background: #fffaf3; }
+.chip-btn {
+  border: none; background: transparent; cursor: pointer; font-size: 12px;
+  padding: 3px 4px; border-radius: 6px; color: var(--ink-soft);
+  font-family: inherit; line-height: 1.2;
+}
+.chip-btn:hover { background: #fff4e6; }
+.chip-btn.active { color: var(--primary); background: #fff4e6; }
+.swap-slot-btn { font-size: 12.5px; flex: none; }
+.swap-menu { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 2px 2px; }
+.swap-opt {
+  border: 1px dashed #d8c8b2; background: #fffdf9; border-radius: 999px;
+  padding: 4px 12px; font-size: 13px; cursor: pointer; color: var(--ink); font-family: inherit;
+}
+.swap-opt:hover { border-color: var(--primary); color: var(--primary); }
+
+/* ---------- 最近记录 ---------- */
+.history-box { max-width: 680px; margin: 14px auto 0; }
+.history-box summary { cursor: pointer; color: var(--ink-soft); font-size: 13.5px; text-align: center; padding: 6px; }
+.history-list { list-style: none; margin: 8px 0 0; padding: 0; }
+.history-list li {
+  display: flex; gap: 8px; align-items: baseline; padding: 7px 4px;
+  border-bottom: 1px dashed var(--line); font-size: 13.5px;
+}
+.history-list li:last-child { border-bottom: none; }
+.h-time { color: #b08968; font-size: 12px; flex: none; font-variant-numeric: tabular-nums; }
+.h-meal { color: #fff; background: var(--ink-soft); font-size: 11px; border-radius: 5px; padding: 0 6px; flex: none; }
+.h-combo { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.h-marks { flex: none; }
 .btn.dish-add { padding: 7px 14px; font-size: 13px; background: var(--primary); color: #fff; border-radius: 8px; flex: none; }
 .btn.dish-add:hover { background: var(--primary-deep); }
 
