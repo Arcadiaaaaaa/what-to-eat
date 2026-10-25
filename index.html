@@ -33,6 +33,7 @@
         </div>
         <nav class="view-nav" aria-label="视图">
           <a href="#/" class="view-link" data-view="recommend">推荐</a>
+          <a href="#/stats" class="view-link" data-view="stats">统计</a>
           <a href="#/settings" class="view-link" data-view="settings">设置</a>
         </nav>
       </div>
@@ -94,7 +95,7 @@
             </label>
             <label class="field">
               <span class="field-label">价格（可留空）</span>
-              <input type="number" id="itemPrice" placeholder="¥" min="0" step="any" inputmode="decimal">
+              <input type="number" id="itemPrice" placeholder="如 15，可留空" min="0" step="any" inputmode="decimal">
             </label>
             <div class="field">
               <span class="field-label">类别</span>
@@ -227,8 +228,38 @@
       </div>
     </section>
 
+    <!-- ========== 统计视图 ========== -->
+    <section id="viewStats" class="view" hidden>
+      <nav class="tabs" id="statsRange" aria-label="统计范围">
+        <button type="button" class="tab active" data-range="today">今天</button>
+        <button type="button" class="tab" data-range="week">7 天</button>
+        <button type="button" class="tab" data-range="month">30 天</button>
+        <button type="button" class="tab" data-range="all">全部</button>
+      </nav>
+
+      <div class="stats-grid">
+        <section class="panel stat-cards-panel">
+          <h2 id="statsTitle">今天的账</h2>
+          <div class="stat-cards" id="statCards"></div>
+        </section>
+        <section class="panel stat-meals-panel">
+          <h2>吃了什么</h2>
+          <p class="panel-hint">新 → 旧；✎ 为微调过的组合，（）内为当次反馈</p>
+          <ul id="statsMealList" class="stats-meal-list"></ul>
+          <div id="statsEmpty" class="empty" hidden>
+            <p>该范围内还没有记录，去推荐页出一张票</p>
+          </div>
+        </section>
+        <section class="panel stat-rank-panel">
+          <h2>出现频率</h2>
+          <p class="panel-hint">窗口 / 餐品 / 饮品 / 菜在结果里被抽中的次数（前 8）</p>
+          <div id="statRank" class="stat-rank"></div>
+        </section>
+      </div>
+    </section>
+
     <footer>
-      <p>数据保存在当前浏览器本地（localStorage），不会上传 · v0.6</p>
+      <p>数据保存在当前浏览器本地（localStorage），不会上传 · v0.8</p>
     </footer>
   </div>
 

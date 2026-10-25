@@ -45,6 +45,7 @@
   const state = { items: [], windows: [], history: [] };
   let currentMeal = 'breakfast';
   let currentMode = 'combo';
+  let statsRange = 'today';
   let last = {}; // 上轮指针，键 "meal:slot"（软防连抽用；随历史一起持久化以支持跨会话续用）
   let currentResult = null; // 当前结果（模块形态，实体级反馈/撤销用）
   let currentRecord = null; // 当前结果（持久化记录形态，微调/菜品反馈用）
@@ -304,16 +305,20 @@
 
   // ---------- 视图切换 ----------
   function currentView() {
-    return location.hash.startsWith('#/settings') ? 'settings' : 'recommend';
+    if (location.hash.startsWith('#/settings')) return 'settings';
+    if (location.hash.startsWith('#/stats')) return 'stats';
+    return 'recommend';
   }
 
   function applyView() {
     const v = currentView();
     $('#viewRecommend').hidden = v !== 'recommend';
     $('#viewSettings').hidden = v !== 'settings';
+    $('#viewStats').hidden = v !== 'stats';
     document.querySelectorAll('.view-link').forEach((a) => {
       a.classList.toggle('active', a.dataset.view === v);
     });
+    if (v === 'stats') renderStats();
   }
 
   // ---------- 餐段切换 ----------
@@ -344,7 +349,124 @@
     renderPoolSummary();
     renderPrefPanel();
     renderHistory();
+    renderStats();
     refreshResultIfEmpty();
+  }
+
+  // ---------- 统计（基于历史记录：吃了什么 / 花了多少钱 / 频率） ----------
+  const STATS_RANGE_LABEL = { today: '今天', week: '最近 7 天', month: '最近 30 天', all: '全部' };
+
+  function statsRecords() {
+    if (statsRange === 'all') return state.history;
+    if (statsRange === 'today') {
+      const d = new Date();
+      d.setHours(0, 0, 0, 0);
+      return state.history.filter((r) => r.ts >= d.getTime());
+    }
+    const days = statsRange === 'week' ? 7 : 30;
+    return state.history.filter((r) => r.ts >= Date.now() - days * 86400000);
+  }
+
+  function renderStats() {
+    const cards = $('#statCards');
+    const mealList = $('#statsMealList');
+    const rankEl = $('#statRank');
+    if (!cards || !mealList || !rankEl) return;
+    $('#statsTitle').textContent = `${STATS_RANGE_LABEL[statsRange]}的账`;
+    cards.textContent = '';
+    mealList.textContent = '';
+    rankEl.textContent = '';
+
+    const records = statsRecords();
+    $('#statsEmpty').hidden = records.length > 0;
+    if (!records.length) return;
+
+    // 核心数字：出票数 / 记账花费 / 平均每顿 / 反馈次数
+    let spend = 0;
+    let pricedMeals = 0;
+    let unknownCount = 0;
+    let voteCount = 0;
+    records.forEach((r) => {
+      const slots = ['food', 'drink'].filter((s) => r[s]);
+      const prices = slots.map((s) => r[s].price).filter((p) => p != null);
+      if (prices.length) {
+        spend += prices.reduce((a, b) => a + b, 0);
+        pricedMeals += 1;
+      }
+      if (prices.length < slots.length) unknownCount += 1;
+      voteCount += (r.votes.food ? 1 : 0) + (r.votes.drink ? 1 : 0)
+        + Object.keys(r.votes.dishes || {}).length;
+    });
+    const spendLabel = unknownCount ? `记账花费（${unknownCount} 张含未标价）` : '记账花费';
+    const cardDefs = [
+      { num: String(records.length), lbl: '出票' },
+      { num: money(Math.round(spend * 100) / 100), lbl: spendLabel, primary: true },
+      { num: pricedMeals ? money(Math.round((spend / pricedMeals) * 100) / 100) : '—', lbl: '平均每顿' },
+      { num: String(voteCount), lbl: '反馈次数' },
+    ];
+    cardDefs.forEach((c) => {
+      const card = el('div', 'stat-card');
+      card.appendChild(el('div', `num${c.primary ? ' primary' : ''}`, c.num));
+      card.appendChild(el('div', 'lbl', c.lbl));
+      cards.appendChild(card);
+    });
+
+    // 吃了什么（新 → 旧）
+    records.slice().reverse().forEach((r) => {
+      const slots = ['food', 'drink'].filter((s) => r[s]);
+      const prices = slots.map((s) => r[s].price);
+      const known = prices.filter((p) => p != null);
+      const priceText = known.length === 0
+        ? '未标价'
+        : `${money(known.reduce((a, b) => a + b, 0))}${known.length < prices.length ? '+' : ''}`;
+      const marks = [
+        r.votes.food && VOTE_LABEL[r.votes.food.action],
+        r.votes.drink && VOTE_LABEL[r.votes.drink.action],
+        ...Object.values(r.votes.dishes || {}).map((v) => VOTE_LABEL[v.action]),
+      ].filter(Boolean).join(' · ');
+      const li = el('li');
+      li.appendChild(el('span', 'sm-time', hhmm(r.ts)));
+      li.appendChild(el('span', 'sm-meal', MEALS[r.meal] ? MEALS[r.meal].label[0] : '?'));
+      li.appendChild(el('span', 'sm-combo',
+        recordComboText(r) + (r.adjusted ? ' ✎' : '') + (marks ? `（${marks}）` : '')));
+      li.appendChild(el('span', 'sm-price', priceText));
+      mealList.appendChild(li);
+    });
+
+    // 频率排行（窗口 / 餐品 / 饮品 / 菜）
+    const counts = new Map();
+    const bump = (name, kind) => {
+      if (!name) return;
+      const cur = counts.get(name) || { count: 0, kind };
+      cur.count += 1;
+      counts.set(name, cur);
+    };
+    records.forEach((r) => {
+      if (r.food) {
+        if (r.food.kind === 'window') {
+          bump(r.food.name, '窗口');
+          r.food.dishes.forEach((d) => bump(d.name, '菜'));
+        } else {
+          bump(r.food.name, '餐品');
+        }
+      }
+      if (r.drink) bump(r.drink.name, '饮品');
+    });
+    const ranked = [...counts.entries()].sort((a, b) => b[1].count - a[1].count).slice(0, 8);
+    const max = ranked.length ? ranked[0][1].count : 1;
+    ranked.forEach(([name, info]) => {
+      const row = el('div', 'rank-row');
+      const nm = el('span', 'rank-name', name);
+      nm.title = name;
+      row.appendChild(nm);
+      const bar = el('div', 'rank-bar');
+      const inner = el('i');
+      inner.style.width = `${Math.max(6, Math.round((info.count / max) * 100))}%`;
+      bar.appendChild(inner);
+      row.appendChild(bar);
+      row.appendChild(el('span', 'rank-count', `${info.kind} ×${info.count}`));
+      rankEl.appendChild(row);
+    });
   }
 
   function renderItemList() {
@@ -1690,6 +1812,16 @@
       if (!ta.value.trim()) { toast('请先粘贴 JSON 内容'); return; }
       const ok = importFromText(ta.value);
       if (ok !== false) ta.value = '';
+    });
+
+    $('#statsRange').addEventListener('click', (e) => {
+      const btn = e.target.closest('.tab[data-range]');
+      if (!btn) return;
+      statsRange = btn.dataset.range;
+      document.querySelectorAll('#statsRange .tab').forEach((b) => {
+        b.classList.toggle('active', b.dataset.range === statsRange);
+      });
+      renderStats();
     });
 
     window.addEventListener('hashchange', applyView);

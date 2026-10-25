@@ -436,8 +436,8 @@ input[type="text"]:focus, input[type="number"]:focus, input:not([type]):focus, t
 .item-list li.list-group-head:first-child { margin-top: 0; }
 .item-list .name { font-weight: 600; overflow-wrap: anywhere; }
 .meal-chips {
-  font-size: 12px; line-height: 18px; color: var(--ink-soft); background: var(--paper-sunk);
-  border-radius: var(--radius-sm); padding: 0 var(--space-2); flex: none;
+  font-size: 12px; line-height: 18px; color: var(--ink); background: var(--paper-sunk);
+  border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0 var(--space-2); flex: none;
 }
 .item-list .price { margin-left: auto; color: var(--ink-soft); font-family: var(--font-mono); font-size: 14px; line-height: 22px; flex: none; }
 .item-list .price.unknown, .wc-dishes .price.unknown { font-family: var(--font-sans); font-size: 13px; }
@@ -554,4 +554,51 @@ footer p { margin: 0; }
   .view, .result-card, .stamp.fresh, .toast, .toast.leaving, .swap-menu, .pf-inputs, .history-list, .del.confirm { animation: none; }
   .tab:hover, .fb-btn:hover, .chip-btn:hover, .swap-opt:hover { transform: none; }
   .history-box summary::after { transition: none; }
+}
+
+/* ---------- 统计视图（v0.8） ---------- */
+.stats-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4);
+  align-items: start; max-width: 880px; margin: 0 auto;
+}
+.stat-cards-panel { grid-column: 1 / -1; }
+.stat-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-3); }
+.stat-card {
+  background: var(--paper-sunk); border: var(--ticket-dash) dashed var(--perforation);
+  border-radius: var(--radius-md); padding: var(--space-3) var(--space-2); text-align: center;
+}
+.stat-card .num {
+  font-family: var(--font-mono); font-size: 22px; line-height: 30px;
+  color: var(--ink); font-weight: 500; overflow-wrap: anywhere;
+}
+.stat-card .num.primary { color: var(--primary); }
+.stat-card .lbl { font-size: 12px; line-height: 18px; color: var(--ink-soft); margin-top: 2px; }
+
+.stats-meal-list { list-style: none; margin: 0; padding: 0; }
+.stats-meal-list li {
+  display: flex; gap: var(--space-2); align-items: baseline;
+  padding: var(--space-2) 0; border-bottom: 1px dashed var(--line); font-size: 14px;
+}
+.stats-meal-list li:last-child { border-bottom: none; }
+.sm-time { font-family: var(--font-mono); font-size: 12px; color: var(--ink-soft); flex: none; }
+.sm-meal {
+  font-size: 12px; line-height: 20px; color: var(--ink); background: var(--paper-sunk);
+  border-radius: var(--radius-sm); padding: 0 var(--space-2); flex: none;
+}
+.sm-combo { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.sm-price { font-family: var(--font-mono); color: var(--primary); font-size: 14px; flex: none; }
+
+.stat-rank { display: grid; gap: var(--space-2); }
+.rank-row {
+  display: grid; grid-template-columns: minmax(64px, 128px) 1fr auto;
+  gap: var(--space-2); align-items: center; font-size: 13px;
+}
+.rank-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rank-bar { height: 8px; background: var(--paper-sunk); border-radius: 4px; overflow: hidden; }
+.rank-bar > i { display: block; height: 100%; background: var(--primary); border-radius: 4px; }
+.rank-count { font-family: var(--font-mono); color: var(--ink-soft); flex: none; white-space: nowrap; }
+
+@media (max-width: 860px) {
+  .stats-grid { grid-template-columns: 1fr; }
+  .stat-cards { grid-template-columns: repeat(2, 1fr); }
 }
