@@ -230,13 +230,17 @@
   }
 
   async function syncRequest(method, body) {
-    const res = await fetch('/api/sync', {
-      method,
-      headers: { 'X-Sync-Code': syncCfg.code, 'Content-Type': 'application/json' },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    const json = await res.json().catch(() => ({}));
-    return { ok: res.ok, status: res.status, ...json };
+    try {
+      const res = await fetch('/api/sync', {
+        method,
+        headers: { 'X-Sync-Code': syncCfg.code, 'Content-Type': 'application/json' },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const json = await res.json().catch(() => ({}));
+      return { ok: res.ok, status: res.status, ...json };
+    } catch (err) {
+      return { ok: false, status: 0 }; // 网络异常：按可重试错误处理，不悬挂状态
+    }
   }
 
   function setSyncState(state, note) {
@@ -290,7 +294,8 @@
   }
 
   async function pushSync(force = false) {
-    if (!syncEnabled() || syncState === 'busy') return;
+    if (!syncEnabled()) return;
+    if (syncState === 'busy' && !force) return; // force 同时表示绕过 busy（内部调用路径）
     setSyncState('busy');
     const payload = syncPayload();
     const r = await syncRequest('PUT', { base: force ? 'force' : syncCfg.base, data: payload });
@@ -315,7 +320,8 @@
     persistSyncCfg();
     setSyncState('busy');
     const r = await syncRequest('GET');
-    if (r.status === 404) { // 全新云端：推本机数据
+    if (r.status === 404) { // 全新云端：推本机数据（busy 由 pushSync 自行管理）
+      setSyncState('idle');
       await pushSync();
       if (syncState === 'ok') toast('云同步已开启，本机数据已上传');
       return;
