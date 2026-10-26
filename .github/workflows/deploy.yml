@@ -11,8 +11,15 @@ jobs:
     # 到仓库 Settings → Secrets and variables → Actions 添加该 secret 后即转绿
     steps:
       - uses: actions/checkout@v4
+      # 只发布站点文件（白名单），README / 测试 / 文档 / .github 不上线；新增静态资源记得加进来
+      - name: Collect site files
+        run: |
+          mkdir dist
+          cp index.html style.css app.js meal-random.js sw.js manifest.webmanifest \
+             icon-180.png icon-192.png icon-512.png dist/
+          cp -r assets dist/
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: d910724af9b6bbb5224d0092bea287e7
-          command: pages deploy . --project-name=what-to-eat --branch=main
+          command: pages deploy dist --project-name=what-to-eat --branch=main
