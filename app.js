@@ -781,6 +781,8 @@
     last = r.nextLast; // 结果正式展示，采用新的上轮指针
     state.history.unshift(record);
     state.history = state.history.slice(0, 100);
+    currentRecord = record; // 先占位为当前，历史列表不重复展示它；落定后 renderResultCard 补齐 currentResult
+    currentResult = null;
     save();
     renderHistory();
 
@@ -928,7 +930,8 @@
     const list = $('#historyList');
     if (!box || !list) return;
     list.textContent = '';
-    const rest = state.history.slice(1);
+    // 当前小票不进历史列表（作废后它不在 history 里，前一张会正常出现）
+    const rest = state.history.filter((r) => r !== currentRecord);
     box.hidden = rest.length === 0;
     rest.slice(0, 12).forEach((r) => {
       const marks = [...new Set([
@@ -946,6 +949,11 @@
       li.appendChild(el('span', 'h-combo', recordComboText(r)));
       if (r.adjusted) li.appendChild(el('span', 'h-adj', '已微调'));
       if (marks) li.appendChild(el('span', 'h-marks', marks));
+      const del = el('button', 'del hdel', '删除');
+      del.type = 'button';
+      del.title = '删除这条记录（统计同步扣除）';
+      del.dataset.id = r.id;
+      li.appendChild(del);
       list.appendChild(li);
     });
   }
@@ -1090,10 +1098,32 @@
 
     const foot = el('div', 'ticket-foot');
     foot.appendChild(el('span', fresh ? 'stamp fresh' : 'stamp', '就它了'));
+    const discard = el('button', 'chip-btn discard', '不用了');
+    discard.type = 'button';
+    discard.title = '作废这张小票：从记录与统计中移除（已做的偏好反馈保留）';
+    discard.dataset.discard = '1';
+    foot.appendChild(discard);
     card.appendChild(foot);
 
     result.appendChild(card);
     ['food', 'drink'].forEach((s) => { if (record.votes[s]) updateFbUI(s); });
+    renderHistory();
+  }
+
+  // 「不用了」：作废当前小票——移出历史（统计随之扣除），回到待抽状态；
+  // 上轮指针保持不变，重抽时仍会软避开刚才那份
+  function discardCurrent() {
+    if (!currentRecord) return;
+    const id = currentRecord.id;
+    state.history = state.history.filter((r) => r.id !== id);
+    Object.keys(dishReceipts).forEach((k) => { if (k.startsWith(`${id}:`)) delete dishReceipts[k]; });
+    currentRecord = null;
+    currentResult = null;
+    pendingSwap = null;
+    save();
+    setResultPlaceholder();
+    renderAll();
+    toast('好，这张不用了，再抽一次吧');
   }
 
   function openSwapMenu(slot) {
@@ -1785,6 +1815,12 @@
 
     // 结果卡片：实体反馈 / 菜品反馈 / 微调换菜换饮品
     $('#result').addEventListener('click', (e) => {
+      // 不用了（点两次确认）
+      const discardBtn = e.target.closest('.chip-btn[data-discard]');
+      if (discardBtn) {
+        if (!rolling) confirmAction(discardBtn, '确认不用？', discardCurrent);
+        return;
+      }
       // 实体反馈撤销
       const undoBtn = e.target.closest('.fb-btn[data-undo]');
       if (undoBtn) {
@@ -1895,6 +1931,15 @@
       toast(`${msgs[action]}「${votedEntity.name}」`);
       updateFbUI(slot);
       renderAll();
+    });
+
+    $('#historyList').addEventListener('click', (e) => {
+      const delBtn = e.target.closest('.hdel');
+      if (!delBtn) return;
+      const id = delBtn.dataset.id;
+      requestDelete(id, delBtn, () => {
+        state.history = state.history.filter((r) => r.id !== id);
+      });
     });
 
     $('#prefList').addEventListener('click', (e) => {

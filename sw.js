@@ -3,7 +3,7 @@
    发布新版本时把 CACHE 版本号 +1 即可让旧缓存失效。 */
 'use strict';
 
-const CACHE = 'what-to-eat-v3';
+const CACHE = 'what-to-eat-v4';
 // 字体子集（assets/fonts/）不列入预缓存清单：访问时由 fetch 处理器按需缓存，离线可用
 const ASSETS = [
   './',

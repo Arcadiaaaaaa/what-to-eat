@@ -326,7 +326,11 @@ h1 { margin: 0; font-family: var(--font-serif); font-size: 28px; line-height: 36
 .result-note { font-size: 12px; line-height: 18px; color: var(--ink-soft); margin-top: var(--space-2); }
 
 /* 印章：落定后盖下 */
-.ticket-foot { display: flex; justify-content: center; padding-top: var(--space-4); }
+.ticket-foot { display: grid; grid-template-columns: 1fr auto 1fr; align-items: end; padding-top: var(--space-4); }
+.ticket-foot .stamp { grid-column: 2; }
+.ticket-foot .discard { grid-column: 3; justify-self: end; }
+.chip-btn.discard:hover { color: var(--danger); border-color: var(--danger); }
+.chip-btn.discard.confirm { color: var(--on-danger); background: var(--danger); border-color: var(--danger); animation: nudge .24s ease; }
 .stamp {
   position: relative; display: inline-block;
   padding: 2px var(--space-2); border: 2px solid var(--primary); border-radius: var(--radius-sm);
@@ -368,6 +372,7 @@ h1 { margin: 0; font-family: var(--font-serif); font-size: 28px; line-height: 36
 .h-combo { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .h-adj { font-size: 12px; color: var(--primary); flex: none; }
 .h-marks { font-size: 12px; color: var(--ink-soft); flex: none; }
+.history-list .hdel { font-size: 12px; line-height: 18px; padding: 1px var(--space-2); margin-right: calc(-1 * var(--space-2)); }
 
 /* ---------- 设置视图 ---------- */
 .settings-layout { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-5); align-items: start; margin-top: var(--space-6); }
@@ -551,7 +556,7 @@ footer p { margin: 0; }
 
 /* 系统开启“减少动态效果”时关闭出票、盖章、Toast 等动画 */
 @media (prefers-reduced-motion: reduce) {
-  .view, .result-card, .stamp.fresh, .toast, .toast.leaving, .swap-menu, .pf-inputs, .history-list, .del.confirm { animation: none; }
+  .view, .result-card, .stamp.fresh, .toast, .toast.leaving, .swap-menu, .pf-inputs, .history-list, .del.confirm, .chip-btn.discard.confirm { animation: none; }
   .tab:hover, .fb-btn:hover, .chip-btn:hover, .swap-opt:hover { transform: none; }
   .history-box summary::after { transition: none; }
 }
