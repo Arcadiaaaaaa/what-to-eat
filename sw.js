@@ -3,7 +3,7 @@
    发布新版本时把 CACHE 版本号 +1 即可让旧缓存失效。 */
 'use strict';
 
-const CACHE = 'what-to-eat-v4';
+const CACHE = 'what-to-eat-v5';
 // 字体子集（assets/fonts/）不列入预缓存清单：访问时由 fetch 处理器按需缓存，离线可用
 const ASSETS = [
   './',
@@ -36,6 +36,9 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
+  const url = new URL(event.request.url);
+  // 云同步 API 与一切跨源请求直连，不进缓存
+  if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
   event.respondWith(
     fetch(event.request)
       .then((res) => {

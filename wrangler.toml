@@ -1,0 +1,8 @@
+name = "what-to-eat"
+pages_build_output_dir = "dist"
+compatibility_date = "2026-10-01"
+
+# 云同步 KV 绑定（functions/api/sync.js 使用）
+[[kv_namespaces]]
+binding = "SYNC"
+id = "3ce4ff77636148eab5a302da01d4b1e4"

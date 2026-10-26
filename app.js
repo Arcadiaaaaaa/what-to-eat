@@ -58,6 +58,7 @@
   let pendingDelete = null; // { id, btn, timer }
   let toastTimer = null;
   let toastHideTimer = null;
+  // （云同步状态声明见下方「云同步」区块）
 
   const $ = (sel) => document.querySelector(sel);
   const el = (tag, className, text) => {
@@ -181,6 +182,271 @@
       history: state.history.slice(0, 100),
       last,
     }));
+    if (syncEnabled()) scheduleSyncPush();
+  }
+
+  // ---------- 云同步（协议见 functions/api/sync.js） ----------
+  const SYNC_KEY = 'wte-sync-v1';
+  let syncCfg = null; // { code, base, at, fp }
+  let syncState = 'idle'; // idle | busy | ok | conflict | error
+  let syncNote = ''; // 冲突/错误的补充说明
+  let syncServerRev = 0; // 冲突时记录的云端版本
+  let syncSuppress = false; // 采用云端数据写入时抑制回推
+  let syncPushTimer = null;
+
+  const syncEnabled = () => !!syncCfg && /^WTE-[A-Z0-9]{15}$/.test(syncCfg.code);
+  const loadSyncCfg = () => {
+    try {
+      const raw = localStorage.getItem(SYNC_KEY);
+      syncCfg = raw ? JSON.parse(raw) : null;
+    } catch { syncCfg = null; }
+  };
+  const persistSyncCfg = () => {
+    try { localStorage.setItem(SYNC_KEY, JSON.stringify(syncCfg)); } catch { /* 忽略 */ }
+  };
+
+  const fingerprint = (payload) => {
+    const s = JSON.stringify(payload);
+    let h = 5381;
+    for (let i = 0; i < s.length; i += 1) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+    return `${s.length}-${h.toString(16)}`;
+  };
+
+  const syncPayload = () => ({
+    version: 2,
+    items: state.items,
+    windows: state.windows,
+    history: state.history.slice(0, 100),
+    last,
+    ticketNo: (() => {
+      try { return parseInt(localStorage.getItem(TICKET_KEY), 10) || 0; } catch { return 0; }
+    })(),
+  });
+
+  function scheduleSyncPush() {
+    if (!syncEnabled() || syncSuppress) return;
+    clearTimeout(syncPushTimer);
+    syncPushTimer = setTimeout(() => { pushSync(); }, 2500);
+  }
+
+  async function syncRequest(method, body) {
+    const res = await fetch('/api/sync', {
+      method,
+      headers: { 'X-Sync-Code': syncCfg.code, 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const json = await res.json().catch(() => ({}));
+    return { ok: res.ok, status: res.status, ...json };
+  }
+
+  function setSyncState(state, note) {
+    syncState = state;
+    syncNote = note || '';
+    renderSyncPanel();
+  }
+
+  // 把云端数据快照应用为本机状态
+  function adoptServerData(data) {
+    syncSuppress = true;
+    state.items = (Array.isArray(data.items) ? data.items : []).filter(isValidItem).map(sanitizeItem);
+    state.windows = (Array.isArray(data.windows) ? data.windows : []).filter(isValidWindow).map(sanitizeWindow);
+    state.history = (Array.isArray(data.history) ? data.history : [])
+      .map(sanitizeRecord).filter(Boolean)
+      .sort((a, b) => b.ts - a.ts).slice(0, 100);
+    last = data.last && typeof data.last === 'object' ? data.last : {};
+    const noMax = state.history.reduce((m, r) => Math.max(m, r.no || 0), 0);
+    const ticketNo = Math.max(Number(data.ticketNo) || 0, noMax);
+    try { localStorage.setItem(TICKET_KEY, String(ticketNo)); } catch { /* 忽略 */ }
+    save();
+    syncSuppress = false;
+    editingDishId = null;
+    setItemEditMode(null);
+    setWindowEditMode(null);
+    renderAll();
+    if (state.history.length) renderResultCard(state.history[0], false);
+    else setResultPlaceholder();
+  }
+
+  async function pullSync() {
+    const r = await syncRequest('GET');
+    if (r.status === 404) { // 云端为空：把本机当第一份
+      await pushSync();
+      return;
+    }
+    if (!r.ok) { setSyncState('error', `拉取失败（${r.status}）`); return; }
+    if (r.revision === syncCfg.base) { setSyncState('ok'); return; }
+    // 云端有新版本：本机若与上次同步快照一致（无未同步改动）→ 直接采用
+    if (fingerprint(syncPayload()) === syncCfg.fp) {
+      adoptServerData(r.data);
+      syncCfg.base = r.revision;
+      syncCfg.at = Date.now();
+      syncCfg.fp = fingerprint(syncPayload());
+      persistSyncCfg();
+      setSyncState('ok');
+      return;
+    }
+    syncServerRev = r.revision;
+    setSyncState('conflict', `云端有新版本（r${r.revision}），本机也有未同步的改动`);
+  }
+
+  async function pushSync(force = false) {
+    if (!syncEnabled() || syncState === 'busy') return;
+    setSyncState('busy');
+    const payload = syncPayload();
+    const r = await syncRequest('PUT', { base: force ? 'force' : syncCfg.base, data: payload });
+    if (r.ok) {
+      syncCfg.base = r.revision;
+      syncCfg.at = Date.now();
+      syncCfg.fp = fingerprint(payload);
+      persistSyncCfg();
+      setSyncState('ok');
+      return;
+    }
+    if (r.status === 409) {
+      syncServerRev = r.revision;
+      setSyncState('conflict', `云端有新版本（r${r.revision}），本机的改动未推上去`);
+      return;
+    }
+    setSyncState('error', `推送失败（${r.status}）`);
+  }
+
+  async function enableSync(code) {
+    syncCfg = { code, base: 0, at: 0, fp: '' };
+    persistSyncCfg();
+    setSyncState('busy');
+    const r = await syncRequest('GET');
+    if (r.status === 404) { // 全新云端：推本机数据
+      await pushSync();
+      if (syncState === 'ok') toast('云同步已开启，本机数据已上传');
+      return;
+    }
+    if (!r.ok) { setSyncState('error', `连接失败（${r.status}）`); return; }
+    // 云端已有数据：让用户选（冲突面板会渲染两个选择）
+    syncCfg.base = r.revision;
+    syncCfg.fp = fingerprint(syncPayload()); // 以启用时刻的本机为基准
+    persistSyncCfg();
+    syncServerRev = r.revision;
+    setSyncState('conflict', `该同步码的云端已有数据（r${r.revision}，更新于 ${new Date(r.updatedAt).toLocaleString()}）`);
+  }
+
+  function disconnectSync() {
+    syncCfg = null;
+    localStorage.removeItem(SYNC_KEY);
+    syncState = 'idle';
+    syncNote = '';
+    renderSyncPanel();
+    toast('已断开云同步（云端数据保留）');
+  }
+
+  function generateSyncCode() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    const bytes = new Uint8Array(15);
+    (window.crypto || window.msCrypto).getRandomValues(bytes);
+    return `WTE-${[...bytes].map((b) => chars[b % chars.length]).join('')}`;
+  }
+
+  function renderSyncPanel() {
+    const body = $('#syncBody');
+    if (!body) return;
+    body.textContent = '';
+
+    if (!syncEnabled()) {
+      const row = el('div', 'sync-row');
+      const input = el('input', 'sync-code-input');
+      input.type = 'text';
+      input.placeholder = '粘贴另一台设备的同步码，或留空生成新的';
+      input.maxLength = 19;
+      input.value = '';
+      const genBtn = el('button', 'btn ghost small', '生成新码启用');
+      genBtn.type = 'button';
+      const useBtn = el('button', 'btn primary sync-enable', '启用');
+      useBtn.type = 'button';
+      const note = el('p', 'sync-note', '全新使用 → 生成新码；已有云端数据 → 在另一台设备复制同步码粘贴进来');
+      const err = syncState === 'error' ? el('p', 'sync-error', syncNote) : null;
+      useBtn.addEventListener('click', async () => {
+        const code = input.value.trim().toUpperCase();
+        if (!code) { toast('请输入同步码或点「生成新码启用」'); return; }
+        if (!/^WTE-[A-Z0-9]{15}$/.test(code)) { toast('同步码格式应为 WTE-XXXXXXXXXXXXXXX'); return; }
+        await enableSync(code);
+      });
+      genBtn.addEventListener('click', async () => {
+        await enableSync(generateSyncCode());
+      });
+      row.appendChild(input);
+      row.appendChild(useBtn);
+      row.appendChild(genBtn);
+      body.appendChild(row);
+      body.appendChild(note);
+      if (err) body.appendChild(err);
+      return;
+    }
+
+    // 已启用
+    const head = el('div', 'sync-row');
+    const stateText = {
+      idle: '待同步', busy: '同步中…',
+      ok: `已同步 · 版本 r${syncCfg.base}${syncCfg.at ? ` · ${new Date(syncCfg.at).toLocaleTimeString()}` : ''}`,
+      conflict: 'ⓘ 两边都有改动，需要你选择保留哪边',
+      error: `同步出错：${syncNote}`,
+    }[syncState] || '';
+    head.appendChild(el('span', `sync-state ${syncState}`, stateText));
+    const codeBtn = el('button', 'btn ghost small', `同步码 ${syncCfg.code.slice(0, 8)}…`);
+    codeBtn.type = 'button';
+    codeBtn.title = '点击复制完整同步码，供其他设备接入';
+    codeBtn.addEventListener('click', async () => {
+      const okCopy = await copyText(syncCfg.code);
+      toast(okCopy ? '同步码已复制' : '复制失败，请手动记录');
+    });
+    head.appendChild(codeBtn);
+    body.appendChild(head);
+
+    const actions = el('div', 'sync-row');
+    const syncNow = el('button', 'btn ghost small', '立即同步');
+    syncNow.type = 'button';
+    syncNow.addEventListener('click', async () => {
+      setSyncState('busy');
+      await pullSync();
+      if (syncState !== 'conflict' && syncState !== 'error') await pushSync();
+    });
+    const off = el('button', 'btn ghost small danger', '断开同步');
+    off.type = 'button';
+    off.addEventListener('click', (e) => {
+      confirmAction(e.currentTarget, '确认断开？', disconnectSync);
+    });
+    actions.appendChild(syncNow);
+    actions.appendChild(off);
+    body.appendChild(actions);
+
+    if (syncState === 'conflict') {
+      const box = el('div', 'sync-conflict');
+      box.appendChild(el('p', 'sync-note', syncNote));
+      const row = el('div', 'sync-row');
+      const useCloud = el('button', 'btn ghost small', '采用云端（覆盖本机）');
+      useCloud.type = 'button';
+      useCloud.addEventListener('click', async () => {
+        setSyncState('busy');
+        const r = await syncRequest('GET');
+        if (r.ok) {
+          adoptServerData(r.data);
+          syncCfg.base = r.revision;
+          syncCfg.at = Date.now();
+          syncCfg.fp = fingerprint(syncPayload());
+          persistSyncCfg();
+          setSyncState('ok');
+          toast('已采用云端数据');
+        } else setSyncState('error', `拉取失败（${r.status}）`);
+      });
+      const useLocal = el('button', 'btn ghost small', '用本机覆盖云端');
+      useLocal.type = 'button';
+      useLocal.addEventListener('click', async () => {
+        await pushSync(true);
+        if (syncState === 'ok') toast('云端已更新为本机数据');
+      });
+      row.appendChild(useCloud);
+      row.appendChild(useLocal);
+      box.appendChild(row);
+      body.appendChild(box);
+    }
   }
 
   // ---------- 导入容错归一化（AI 输出 / 手输均可） ----------
@@ -367,6 +633,7 @@
     renderHistory();
     renderStats();
     renderDataActions();
+    renderSyncPanel();
     refreshResultIfEmpty();
   }
 
@@ -2103,15 +2370,23 @@
     });
 
     window.addEventListener('hashchange', applyView);
+    // 云同步：回到前台时拉一次（跨设备改动及时到位）
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && syncEnabled() && syncState !== 'busy') {
+        pullSync();
+      }
+    });
   }
 
   // ---------- 启动 ----------
   load();
+  loadSyncCfg();
   bindEvents();
   applyView();
   switchMeal('breakfast');
   if (state.history.length) renderResultCard(state.history[0], false);
   else setResultPlaceholder();
+  if (syncEnabled()) pullSync();
 
   // PWA：安全上下文（https / localhost）注册 Service Worker，离线可用
   if ('serviceWorker' in navigator && window.isSecureContext) {
